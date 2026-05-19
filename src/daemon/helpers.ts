@@ -1,7 +1,17 @@
 import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
-import { UUID_RE } from '#choros/identity.ts'
-import { ERR_INVALID_PARAMS, ERR_UNKNOWN_SESSION, type RpcError } from '#choros/protocol/methods.ts'
+import { NIL_UUID, UUID_RE } from '#choros/identity.ts'
+import { ERR_INVALID_PARAMS, ERR_NOT_FOUND, type RpcError } from '#choros/protocol/methods.ts'
+
+/** Escape SQL LIKE meta-characters so caller input can't smuggle
+ *  wildcards into the prefix-match branch of `resolveRecipient`.
+ *  Without this, target=`%` would match any session, and `_` would
+ *  match any single character — letting a peer probe the session
+ *  space via ambiguity errors. Paired with `ESCAPE '\'` on the
+ *  query. */
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, '\\$&')
+}
 
 /** Generic "args object" coercion used by every handler. */
 export function asObject(args: unknown, label: string): Record<string, unknown> | RpcError {
@@ -119,6 +129,9 @@ export function resolveRecipient(
 ): { id: string; display_name: string | null } | RpcError {
   // Exact UUID
   if (UUID_RE.test(target)) {
+    if (target === NIL_UUID) {
+      return { code: ERR_INVALID_PARAMS, message: 'recipient cannot be the nil UUID' }
+    }
     const row = ctx.storage.db
       .query('SELECT id, display_name FROM sessions WHERE id = ?')
       .get(target) as { id: string; display_name: string | null } | null
@@ -155,10 +168,13 @@ export function resolveRecipient(
     )
     .get(target) as { id: string; display_name: string | null } | null
   if (byName) return byName
-  // UUID prefix match (must be unambiguous).
+  // UUID prefix match (must be unambiguous). Escape LIKE meta-chars
+  // so target `%` or `_` can't broaden the match to "everything" or
+  // "any single char." Without escaping, a peer could probe the
+  // session space via the ambiguity error.
   const prefix = ctx.storage.db
-    .query('SELECT id, display_name FROM sessions WHERE id LIKE ? LIMIT 2')
-    .all(`${target}%`) as { id: string; display_name: string | null }[]
+    .query("SELECT id, display_name FROM sessions WHERE id LIKE ? ESCAPE '\\' LIMIT 2")
+    .all(`${escapeLike(target)}%`) as { id: string; display_name: string | null }[]
   if (prefix.length === 1 && prefix[0]) return prefix[0]
   if (prefix.length > 1) {
     return {
@@ -167,7 +183,7 @@ export function resolveRecipient(
     }
   }
   return {
-    code: ERR_UNKNOWN_SESSION,
+    code: ERR_NOT_FOUND,
     message: `unknown recipient: ${target}`,
   }
 }

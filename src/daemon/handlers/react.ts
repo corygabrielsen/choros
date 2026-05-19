@@ -41,10 +41,12 @@ export function handleReact(ctx: HandlerCtx, rawArgs: unknown): ReactResult | Rp
   if (!orig) {
     return { code: ERR_NOT_FOUND, message: `react: unknown msg_id ${msg_id}` }
   }
-  if (orig.from_session === session_id) {
-    return { code: ERR_INVALID_PARAMS, message: 'react: cannot react to a message from self' }
-  }
-  if (orig.to_session !== session_id) {
+  if (orig.from_session === session_id || orig.to_session !== session_id) {
+    // Both cases ("reacting to your own message" and "reacting to
+    // someone else's") collapse to "you aren't a recipient"; the
+    // distinction isn't useful to expose and keeping a separate
+    // ERR_INVALID_PARAMS for self mixes "shape error" with "auth
+    // error" classes.
     return { code: ERR_NOT_AUTHORIZED, message: 'react: not a recipient of this message' }
   }
 

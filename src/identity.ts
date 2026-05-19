@@ -3,8 +3,17 @@ import type { Context } from '#choros/effects.ts'
 
 /** RFC 4122 UUID shape — used by the shim to recognise CC session
  *  identities and by the daemon's `resolveRecipient` to short-circuit
- *  the lookup path. */
+ *  the lookup path. Kept loose (any hex/version) so synthetic test
+ *  fixtures + future UUID variants both fit; the nil UUID is rejected
+ *  separately via {@link NIL_UUID} so it can't slip in as a
+ *  synthetic-target sentinel. */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** The all-zero UUID. RFC 4122 reserves this as a "nil" sentinel; we
+ *  reject it as a target because resolveRecipient's synthetic-target
+ *  fallback would otherwise let a peer write messages addressed to
+ *  the void. */
+export const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 
 /** Monotonic per-process counter used by {@link generateMessageId}.
  *  Combined with millisecond-precision timestamps and an 8-char

@@ -6,7 +6,7 @@ import {
   optionalString,
   requireString,
 } from '#choros/daemon/helpers.ts'
-import type { RpcError } from '#choros/protocol/methods.ts'
+import { ERR_UNKNOWN_SESSION, type RpcError } from '#choros/protocol/methods.ts'
 
 export interface SetDisplayNameResult {
   display_name: string | null
@@ -31,7 +31,15 @@ export function handleSetDisplayName(
   const value: string | null =
     display_name === undefined || display_name.length === 0 ? null : display_name
 
-  ctx.storage.db.query('UPDATE sessions SET display_name = ? WHERE id = ?').run(value, session_id)
+  const result = ctx.storage.db
+    .query('UPDATE sessions SET display_name = ? WHERE id = ?')
+    .run(value, session_id)
+  if (result.changes === 0) {
+    // Mirrors set_status / set_intent / heartbeat — explicit error on
+    // unknown session rather than a silent success that masks a stale
+    // shim still trying to rename a deregistered session row.
+    return { code: ERR_UNKNOWN_SESSION, message: 'set_display_name: unknown session' }
+  }
   ctx.router.setDisplayName(session_id, value)
   return { display_name: value }
 }
