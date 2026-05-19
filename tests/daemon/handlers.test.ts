@@ -304,3 +304,215 @@ describe('daemon handlers (Phase 2)', () => {
     }
   })
 })
+
+describe('authz + error-contract regressions (post bug-r5/r6 saturation)', () => {
+  test('react: self-react rejected as ERR_NOT_AUTHORIZED', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      const sent = await alice.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_A,
+        to: PEER_B,
+        body: 'hi',
+      })
+      // The sender cannot react to their own message — they aren't
+      // the recipient row's to_session.
+      await expect(
+        alice.call('choros.react', {
+          session_id: PEER_A,
+          msg_id: sent.msg_id,
+          emoji: '👍',
+        }),
+      ).rejects.toThrow(/not a recipient/)
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('react: non-recipient rejected as ERR_NOT_AUTHORIZED', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      const carol = await registerClient(daemon, PEER_C, 'carol')
+      const sent = await alice.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_A,
+        to: PEER_B,
+        body: 'hi',
+      })
+      // Carol isn't a recipient — knowing the msg_id alone must not
+      // let her fire a forged NOTIFY_REACTION at Alice.
+      await expect(
+        carol.call('choros.react', {
+          session_id: PEER_C,
+          msg_id: sent.msg_id,
+          emoji: '🚀',
+        }),
+      ).rejects.toThrow(/not a recipient/)
+      await alice.close()
+      await bob.close()
+      await carol.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('react: unknown msg_id returns ERR_NOT_FOUND', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      await expect(
+        alice.call('choros.react', {
+          session_id: PEER_A,
+          msg_id: 'does-not-exist',
+          emoji: '👍',
+        }),
+      ).rejects.toThrow(/unknown msg_id/)
+      await alice.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('mark_read on a message addressed to someone else is rejected', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      const carol = await registerClient(daemon, PEER_C, 'carol')
+      const sent = await alice.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_A,
+        to: PEER_B,
+        body: 'for bob',
+      })
+      await expect(
+        carol.call('choros.mark_read', { session_id: PEER_C, msg_id: sent.msg_id }),
+      ).rejects.toThrow(/not your message/)
+      await alice.close()
+      await bob.close()
+      await carol.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('confirm_delivery on a foreign msg_id is rejected', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      const carol = await registerClient(daemon, PEER_C, 'carol')
+      const sent = await alice.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_A,
+        to: PEER_B,
+        body: 'for bob',
+      })
+      await expect(
+        carol.call('choros.confirm_delivery', { session_id: PEER_C, msg_id: sent.msg_id }),
+      ).rejects.toThrow(/not your message/)
+      await alice.close()
+      await bob.close()
+      await carol.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('set_status / set_intent / set_display_name on unknown session error', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const client = await connectTestClient(daemon.socketPath)
+      // Caller hasn't registered; the session row doesn't exist.
+      await expect(
+        client.call('choros.set_status', { session_id: PEER_A, text: 'wat' }),
+      ).rejects.toThrow(/unknown session/)
+      await expect(
+        client.call('choros.set_intent', { session_id: PEER_A, text: 'wat' }),
+      ).rejects.toThrow(/unknown session/)
+      await expect(
+        client.call('choros.set_display_name', { session_id: PEER_A, display_name: 'wat' }),
+      ).rejects.toThrow(/unknown session/)
+      await client.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('send to nil UUID is rejected', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      await expect(
+        alice.call('choros.send', {
+          session_id: PEER_A,
+          to: '00000000-0000-0000-0000-000000000000',
+          body: 'into the void',
+        }),
+      ).rejects.toThrow(/nil UUID/)
+      await alice.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('send by display_name is case-insensitive', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'Bob')
+      const inbound = bob.nextNotification('choros.inbound_message')
+      // Bob is registered with display_name 'Bob' (mixed case). Alice
+      // sends to 'BOB' (upper); resolution should still find him.
+      await alice.call('choros.send', { session_id: PEER_A, to: 'BOB', body: 'hi' })
+      const msg = (await inbound) as { from_session: string; body: string }
+      expect(msg.from_session).toBe(PEER_A)
+      expect(msg.body).toBe('hi')
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('publish to a topic with no subscribers returns msg_id=null', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const result = await alice.call<{ msg_id: string | null; delivered_to: string[] }>(
+        'choros.publish',
+        { session_id: PEER_A, topic: 'lonely', body: 'anyone?' },
+      )
+      expect(result.msg_id).toBeNull()
+      expect(result.delivered_to).toHaveLength(0)
+      await alice.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('topic canonicalization: subscribe(FOO) reaches publish(foo)', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      await bob.call('choros.subscribe', { session_id: PEER_B, topic: 'FOO' })
+      const inbound = bob.nextNotification('choros.inbound_message')
+      const result = await alice.call<{ msg_id: string | null }>('choros.publish', {
+        session_id: PEER_A,
+        topic: 'foo',
+        body: 'case-folded',
+      })
+      expect(result.msg_id).not.toBeNull()
+      const msg = (await inbound) as { topic: string; body: string }
+      expect(msg.topic).toBe('foo')
+      expect(msg.body).toBe('case-folded')
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+})
