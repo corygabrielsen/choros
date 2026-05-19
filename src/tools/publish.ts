@@ -2,13 +2,14 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { listKnownInstances, parseMentions } from '../identity.ts'
-import { enforceBodyCap, validateReplyBudget } from '../inbox.ts'
+import { enforceBodyCap, validateReplyBudget, validateSpeechAct } from '../inbox.ts'
 import { listSubscribers } from './subscribe.ts'
 
 export interface PublishArgs {
   topic?: string
   body?: string
   reply_budget?: number
+  act?: string
 }
 
 export interface PublishTargets {
@@ -36,6 +37,7 @@ export async function handlePublish(
   if (!body) throw new Error('publish: "body" is required')
   enforceBodyCap(body, 'publish')
   const replyBudget = validateReplyBudget(args.reply_budget)
+  const act = validateSpeechAct(args.act)
 
   const known = await listKnownInstances(ctx, targets.stateRoot, targets.projectsRoot)
   const subscribers: string[] = []
@@ -65,6 +67,7 @@ export async function handlePublish(
     topic,
     ...(mentions.length > 0 ? { mentions } : {}),
     ...(replyBudget !== undefined ? { reply_budget: replyBudget } : {}),
+    ...(act ? { act } : {}),
   }
   await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase, null, 2))

@@ -62,6 +62,24 @@ describe('handleSend', () => {
       handleSend(ctx, sendTargets, { to: 'peer', body: 'hi', reply_budget: -1 }),
     ).rejects.toThrow()
   })
+
+  test('threads speech-act tag into the payload', async () => {
+    const ctx = fakeContext()
+    const r = await handleSend(ctx, sendTargets, {
+      to: 'peer',
+      body: 'is it merged?',
+      act: 'QUESTION',
+    })
+    const payload = JSON.parse(await ctx.fs.readFile(`${STATE}/peer/inbox/${r.msg_id}.json`))
+    expect(payload.act).toBe('QUESTION')
+  })
+
+  test('rejects unknown speech-act value', async () => {
+    const ctx = fakeContext()
+    await expect(
+      handleSend(ctx, sendTargets, { to: 'peer', body: 'hi', act: 'SHOUT' }),
+    ).rejects.toThrow(/one of/)
+  })
 })
 
 describe('handleReact', () => {

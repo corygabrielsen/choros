@@ -18,7 +18,7 @@ import { handleSend } from './tools/send.ts'
 import { handleSetIntent, handleSetStatus } from './tools/set_state.ts'
 import { handleSubscribe, handleUnsubscribe } from './tools/subscribe.ts'
 
-const server = new Server({ name: 'choros', version: '0.19.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.20.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -264,7 +264,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.19 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.20 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )

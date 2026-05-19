@@ -2,12 +2,13 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { parseMentions } from '../identity.ts'
-import { enforceBodyCap, validateReplyBudget } from '../inbox.ts'
+import { enforceBodyCap, validateReplyBudget, validateSpeechAct } from '../inbox.ts'
 import { liveEligiblePeers } from '../presence.ts'
 
 export interface BroadcastArgs {
   body?: string
   reply_budget?: number
+  act?: string
 }
 
 export interface BroadcastTargets {
@@ -32,6 +33,7 @@ export async function handleBroadcast(
   if (!body) throw new Error('broadcast: "body" is required')
   enforceBodyCap(body, 'broadcast')
   const replyBudget = validateReplyBudget(args.reply_budget)
+  const act = validateSpeechAct(args.act)
 
   const recipients = await liveEligiblePeers(ctx, {
     stateRoot: targets.stateRoot,
@@ -61,6 +63,7 @@ export async function handleBroadcast(
     broadcast: true,
     ...(mentions.length > 0 ? { mentions } : {}),
     ...(replyBudget !== undefined ? { reply_budget: replyBudget } : {}),
+    ...(act ? { act } : {}),
   }
   await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase, null, 2))

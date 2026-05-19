@@ -12,6 +12,29 @@ import { findJsonlForSession } from './identity.ts'
 export const BODY_CAP_BYTES = 64 * 1024
 export const SWEEP_INTERVAL_MS = 60_000
 
+/** Speech-act taxonomy. Optional `act` field on every outbound message.
+ *  Borrowed from speech-act theory in linguistics — the type of utterance
+ *  carries semantic content distinct from the body. Recipients can route
+ *  attention based on it (answer QUESTIONs first, defer ANNOUNCEments). */
+export const SPEECH_ACTS = [
+  'REQUEST',
+  'COMMIT',
+  'ANNOUNCE',
+  'QUESTION',
+  'ANSWER',
+  'OBSERVATION',
+] as const
+export type SpeechAct = (typeof SPEECH_ACTS)[number]
+
+export function validateSpeechAct(value: unknown): SpeechAct | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') throw new Error('act must be a string')
+  if (!(SPEECH_ACTS as readonly string[]).includes(value)) {
+    throw new Error(`act must be one of: ${SPEECH_ACTS.join(', ')}`)
+  }
+  return value as SpeechAct
+}
+
 export interface InboxTargets {
   stateRoot: string
   projectsRoot: string
@@ -35,6 +58,7 @@ export interface InboxMessage {
   topic?: string
   broadcast?: boolean
   mentions?: string[]
+  act?: SpeechAct
 }
 
 /** Read a single inbox `.json`. Returns null on missing or unparseable. */
@@ -99,6 +123,7 @@ export async function emitInboxMessage(
   if (data.in_reply_to) meta.in_reply_to = String(data.in_reply_to)
   if (data.topic) meta.topic = String(data.topic)
   if (data.broadcast) meta.broadcast = 'true'
+  if (data.act) meta.act = data.act
   if (Array.isArray(data.mentions) && data.mentions.length > 0) {
     const mentionedMe = data.mentions.some(
       m => m === targets.me || (typeof m === 'string' && m === targets.myName),

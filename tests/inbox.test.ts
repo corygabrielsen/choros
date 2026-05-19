@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import {
   BODY_CAP_BYTES,
+  SPEECH_ACTS,
   archiveInboxMessage,
   emitInboxMessage,
   enforceBodyCap,
   readInboxMessage,
   validateReplyBudget,
+  validateSpeechAct,
 } from '../src/inbox.ts'
 import { fakeContext } from './fakes/index.ts'
 
@@ -60,6 +62,26 @@ describe('enforceBodyCap', () => {
   test('counts UTF-8 bytes, not codepoints', () => {
     const big = '😀'.repeat(BODY_CAP_BYTES / 4 + 1)
     expect(() => enforceBodyCap(big, 'send')).toThrow()
+  })
+})
+
+describe('validateSpeechAct', () => {
+  test('returns undefined for undefined / null', () => {
+    expect(validateSpeechAct(undefined)).toBeUndefined()
+    expect(validateSpeechAct(null)).toBeUndefined()
+  })
+
+  test('accepts every act in the SPEECH_ACTS enum', () => {
+    for (const act of SPEECH_ACTS) {
+      expect(validateSpeechAct(act)).toBe(act)
+    }
+  })
+
+  test('rejects unknown strings, numbers, objects', () => {
+    expect(() => validateSpeechAct('SHOUT')).toThrow(/one of/)
+    expect(() => validateSpeechAct(42)).toThrow()
+    expect(() => validateSpeechAct({})).toThrow()
+    expect(() => validateSpeechAct('question')).toThrow()
   })
 })
 
@@ -132,6 +154,18 @@ describe('emitInboxMessage', () => {
     expect(r.status).toBe('dropped')
     expect(ctx.fs.existsSync(`${STATE}/${sender}/sent_acks/m1.dropped`)).toBe(true)
     expect(emittedDropped.has('m1')).toBe(true)
+  })
+
+  test('surfaces act in channel meta when present', async () => {
+    const { ctx, targets, wedge, emittedDropped } = setup()
+    const filename = 'm1.json'
+    await ctx.fs.writeFile(
+      `${targets.inboxDir}/${filename}`,
+      JSON.stringify({ id: 'm1', body: 'is it ready?', act: 'QUESTION' }),
+    )
+    await emitInboxMessage(ctx, targets, wedge, emittedDropped, filename)
+    const params = ctx.mcp.notifications[0]?.params as { meta?: Record<string, string> }
+    expect(params?.meta?.act).toBe('QUESTION')
   })
 
   test('mentioned_me=true when sender mentions us', async () => {
