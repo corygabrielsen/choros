@@ -1,8 +1,13 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
-import { asObject, isRpcError, requireString } from '#choros/daemon/helpers.ts'
+import { asObject, cachedSenderName, isRpcError, requireString } from '#choros/daemon/helpers.ts'
 import { deliverOrBuffer } from '#choros/daemon/notify.ts'
 import { sanitizeId } from '#choros/identity.ts'
-import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
+import {
+  ERR_INVALID_PARAMS,
+  ERR_NOT_AUTHORIZED,
+  ERR_NOT_FOUND,
+  type RpcError,
+} from '#choros/protocol/methods.ts'
 import { NOTIFY_REACTION } from '#choros/protocol/notifications.ts'
 
 export interface ReactResult {
@@ -26,15 +31,21 @@ export function handleReact(ctx: HandlerCtx, rawArgs: unknown): ReactResult | Rp
     return { code: ERR_INVALID_PARAMS, message: e instanceof Error ? e.message : String(e) }
   }
 
-  // Look up the original sender to know who gets the notification.
+  // Look up the original sender + recipient. Authz: only the
+  // recipient of this message may react to it; otherwise knowing a
+  // msg_id is a forgery primitive (any other peer who knows the id
+  // could fire a NOTIFY_REACTION at the original sender).
   const orig = ctx.storage.db
-    .query('SELECT from_session FROM messages WHERE id = ?')
-    .get(msg_id) as { from_session: string } | null
+    .query('SELECT from_session, to_session FROM messages WHERE id = ?')
+    .get(msg_id) as { from_session: string; to_session: string | null } | null
   if (!orig) {
-    return { code: ERR_INVALID_PARAMS, message: `react: unknown msg_id ${msg_id}` }
+    return { code: ERR_NOT_FOUND, message: `react: unknown msg_id ${msg_id}` }
   }
   if (orig.from_session === session_id) {
     return { code: ERR_INVALID_PARAMS, message: 'react: cannot react to a message from self' }
+  }
+  if (orig.to_session !== session_id) {
+    return { code: ERR_NOT_AUTHORIZED, message: 'react: not a recipient of this message' }
   }
 
   // Upsert: same reactor reacting again replaces their prior emoji.
@@ -46,12 +57,7 @@ export function handleReact(ctx: HandlerCtx, rawArgs: unknown): ReactResult | Rp
     )
     .run(msg_id, session_id, emoji, ctx.nowIso())
 
-  const reactorName =
-    (
-      ctx.storage.db.query('SELECT display_name FROM sessions WHERE id = ?').get(session_id) as {
-        display_name: string | null
-      } | null
-    )?.display_name ?? null
+  const reactorName = cachedSenderName(ctx, session_id)
 
   deliverOrBuffer(ctx, orig.from_session, NOTIFY_REACTION, {
     msg_id,

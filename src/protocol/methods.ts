@@ -50,6 +50,15 @@ export const ERR_INTERNAL = -32603
 export const ERR_PROTOCOL_MISMATCH = -32000
 export const ERR_UNKNOWN_SESSION = -32001
 export const ERR_ALREADY_REGISTERED = -32002
+/** Caller is not authorized to perform this operation on this object
+ *  (e.g. reacting to a message they didn't receive, marking-read a
+ *  message addressed to another session). Distinct from
+ *  ERR_UNKNOWN_SESSION which means the *caller's* session row is
+ *  gone — this is "you exist but this isn't yours." */
+export const ERR_NOT_AUTHORIZED = -32003
+/** Targeted object (message, thread) doesn't exist. Distinct from a
+ *  silent no-op so the caller can react explicitly. */
+export const ERR_NOT_FOUND = -32004
 
 /* --- choros.register ---------------------------------------------------- */
 

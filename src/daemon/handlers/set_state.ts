@@ -1,6 +1,6 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { asObject, isRpcError, optionalString, requireString } from '#choros/daemon/helpers.ts'
-import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
+import { ERR_INVALID_PARAMS, ERR_UNKNOWN_SESSION, type RpcError } from '#choros/protocol/methods.ts'
 
 export interface SetStateResult {
   status?: string | null
@@ -28,9 +28,16 @@ export function handleSetStatus(ctx: HandlerCtx, rawArgs: unknown): SetStateResu
   const parsed = parseArgs(rawArgs, 'agent_status')
   if (isRpcError(parsed)) return parsed
   const value = parsed.text.length === 0 ? null : parsed.text
-  ctx.storage.db
+  // Surface "unknown session" instead of silently no-op'ing. Same
+  // predicate the heartbeat handler now uses; previously a stale
+  // shim calling set_status for a deregistered/never-registered
+  // session got an opaque success.
+  const result = ctx.storage.db
     .query('UPDATE sessions SET agent_status = ? WHERE id = ?')
     .run(value, parsed.session_id)
+  if (result.changes === 0) {
+    return { code: ERR_UNKNOWN_SESSION, message: 'set_status: unknown session' }
+  }
   return { status: value }
 }
 
@@ -38,8 +45,11 @@ export function handleSetIntent(ctx: HandlerCtx, rawArgs: unknown): SetStateResu
   const parsed = parseArgs(rawArgs, 'agent_intent')
   if (isRpcError(parsed)) return parsed
   const value = parsed.text.length === 0 ? null : parsed.text
-  ctx.storage.db
+  const result = ctx.storage.db
     .query('UPDATE sessions SET agent_intent = ? WHERE id = ?')
     .run(value, parsed.session_id)
+  if (result.changes === 0) {
+    return { code: ERR_UNKNOWN_SESSION, message: 'set_intent: unknown session' }
+  }
   return { intent: value }
 }
