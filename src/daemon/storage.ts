@@ -178,10 +178,13 @@ export function recordHeartbeat(
 export const PENDING_PER_SESSION_CAP = 1024
 
 /** Buffer one notification for a session whose shim is currently
- *  offline. Trims the queue to {@link PENDING_PER_SESSION_CAP} oldest
- *  rows per session_id so a long-offline peer can't grow unbounded.
- *  The trim is gated by an OFFSET probe so the typical case (offline
- *  peer with < cap pending rows) skips the DELETE entirely. */
+ *  offline. Trims the queue to keep the NEWEST {@link
+ *  PENDING_PER_SESSION_CAP} rows per session_id so a long-offline
+ *  peer can't grow the table unbounded. Newest-wins is correct for
+ *  this surface because a long-offline peer cares more about recent
+ *  events than ancient ones. The trim is gated by an OFFSET probe so
+ *  the typical case (offline peer with < cap pending rows) skips the
+ *  DELETE entirely. */
 export function enqueuePendingNotification(
   storage: Storage,
   args: { session_id: string; method: string; params: unknown; nowIso: string },
@@ -210,23 +213,54 @@ export function enqueuePendingNotification(
     .run(args.session_id, args.session_id, PENDING_PER_SESSION_CAP)
 }
 
-/** Drain (read + delete) every pending notification for a session in
- *  a single atomic statement. Called by the register handler so the
- *  shim receives buffered events as part of its handshake response.
- *  `DELETE ... RETURNING` ensures the SELECT and DELETE can't observe
- *  a row inserted between them (the previous two-statement version
- *  was safe under bun:sqlite's synchronous semantics but fragile to
- *  any future async refactor). */
+/** Max notifications drained into a single register response. Prevents
+ *  a long-offline peer from getting a multi-MB drain frame that
+ *  blocks the shim's event loop on JSON.parse + a thousand
+ *  synchronous mcp.notification re-emits. Excess rows stay in the
+ *  table for the NEXT drain (which can be triggered by a follow-up
+ *  no-op register, or — TODO — a dedicated drain RPC). */
+export const PENDING_DRAIN_MAX = 256
+
+/** Drain pending notifications for a session in insertion (FIFO) order.
+ *  Caller (register) replays them BEFORE live traffic so ordering is
+ *  preserved across reconnect.
+ *
+ *  We DELETE inside a transaction by id-range from the FIFO-ordered
+ *  SELECT, so `RETURNING` order (which SQLite does not promise) can't
+ *  scramble the backlog. A row with a corrupt `params_json` is logged
+ *  and skipped rather than aborting the entire drain — historically
+ *  `DELETE … RETURNING` would silently nuke the rest of the backlog
+ *  on the throwing JSON.parse. */
 export function drainPendingNotifications(
   storage: Storage,
   sessionId: string,
 ): { method: string; params: unknown }[] {
   const rows = storage.db
     .query(
-      `DELETE FROM pending_notifications
+      `SELECT id, method, params_json FROM pending_notifications
        WHERE session_id = ?
-       RETURNING method, params_json`,
+       ORDER BY id ASC
+       LIMIT ?`,
     )
-    .all(sessionId) as { method: string; params_json: string }[]
-  return rows.map(r => ({ method: r.method, params: JSON.parse(r.params_json) }))
+    .all(sessionId, PENDING_DRAIN_MAX) as {
+    id: number
+    method: string
+    params_json: string
+  }[]
+  if (rows.length === 0) return []
+  const ids = rows.map(r => r.id)
+  const placeholders = ids.map(() => '?').join(',')
+  storage.db.query(`DELETE FROM pending_notifications WHERE id IN (${placeholders})`).run(...ids)
+  const drained: { method: string; params: unknown }[] = []
+  for (const r of rows) {
+    try {
+      drained.push({ method: r.method, params: JSON.parse(r.params_json) })
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e)
+      process.stderr.write(
+        `[choros-daemon] dropping malformed pending notification id=${r.id} session=${sessionId}: ${m}\n`,
+      )
+    }
+  }
+  return drained
 }

@@ -88,12 +88,16 @@ export class SessionRouter {
 
   /** Sink for a session, or null if not currently connected. The null
    *  case means the daemon should buffer notifications via
-   *  `enqueuePendingNotification`. */
+   *  `enqueuePendingNotification`. On a stale (closed) sink, drop ALL
+   *  three maps consistently — leaving displayName behind would let
+   *  the next fan-out hand out a stale name for a session that no
+   *  longer has a sink. */
   sinkFor(sessionId: string): NotificationSink | null {
     const sink = this.bySession.get(sessionId)
     if (!sink) return null
     if (!sink.isOpen()) {
       this.bySession.delete(sessionId)
+      this.displayName.delete(sessionId)
       this.sessionBySink.delete(sink)
       return null
     }
