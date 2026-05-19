@@ -1,15 +1,10 @@
 import { join } from 'node:path'
+import { LIVE_MAX_AGE_MS } from './constants.ts'
 import type { Context } from './effects.ts'
 
 /** RFC 4122 UUID shape — used to distinguish CC session identities
  *  from legacy cwd-encoded identifiers. */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/** Default: a heartbeat mtime ≤ this is "fresh". The actual production
- *  threshold is the same value used by health.ts; importing here would
- *  create a cycle, so it is duplicated as a constant. Kept private to
- *  the resolver, which is the only identity-layer consumer of liveness. */
-const RESOLVER_LIVE_AGE_MS = 90_000
 
 /** Validate an identifier that's about to become part of a filesystem path.
  *  Used at every boundary where untrusted input (msg_id, recipient handle,
@@ -416,7 +411,7 @@ export async function resolveRecipient(
     const withAges = await Promise.all(
       byName.map(async k => ({ k, age: await heartbeatAge(k.id) })),
     )
-    const live = withAges.filter(x => x.age <= RESOLVER_LIVE_AGE_MS)
+    const live = withAges.filter(x => x.age <= LIVE_MAX_AGE_MS)
     const pool = live.length > 0 ? live : withAges
     const sorted = pool.sort((a, b) => a.age - b.age || b.k.lastActive - a.k.lastActive)
     const pick = sorted[0]

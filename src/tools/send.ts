@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
-import { recipientLastAgentTurnAgeMs, recipientLiveness } from '../health.ts'
+import { type RecipientHealth, recipientLastAgentTurnAgeMs, recipientLiveness } from '../health.ts'
 import { isSelf, parseMentions, resolveRecipient } from '../identity.ts'
 import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 
@@ -35,7 +35,7 @@ export interface SendResult {
   recipient_id: string
   recipient_name: string | null
   verify_path: string
-  live_status: string
+  live_status: RecipientHealth['status']
   live_age_ms?: number | undefined
   last_agent_turn_age_ms?: number | undefined
 }

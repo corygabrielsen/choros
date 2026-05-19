@@ -189,16 +189,29 @@ done | sort
 
 ### `/choros doctor` — diagnostic snapshot
 
-Call `mcp__choros__doctor` with optional `peer` and/or `msg_id`. Returns structured JSON: self state + every peer's classification + outbound-unconfirmed messages per peer. Use when sends look like they may have been dropped, when `/choros inbox` shows unread items without `[delivered]`, or when an agent-to-agent flow has gone silent.
+Call `mcp__choros__doctor` (no args). Returns structured JSON: self state + every known peer's classification. Use when sends look like they may have been dropped, when `/choros inbox` shows unread items without `[delivered]`, or when an agent-to-agent flow has gone silent.
 
-The tool returns raw data — no pre-computed verdicts. The calling agent reasons over the fields. Key signals per peer:
+The tool returns raw data — no pre-computed verdicts. The calling agent reasons over the fields. Top-level shape:
+
+```
+{
+  self: { session_id, display_name, inbox_unread },
+  peers: [
+    { session_id, display_name, classification, heartbeat_age_ms,
+      last_agent_turn_age_ms, wedged, bun_alive },
+    ...
+  ]
+}
+```
+
+Key signals per peer:
 
 - `classification`: `live` / `paused` / `wedged` / `stale` / `dead` / `none`
 - `heartbeat_age_ms`: their bun's last heartbeat
 - `last_agent_turn_age_ms`: their JSONL's last write (proxy for "agent has taken a turn")
-- `outbound_unconfirmed`: msgs I sent them that lack a `.seen` sidecar (plus the path to stat for confirmation)
+- `wedged` / `bun_alive`: explicit booleans the agent can branch on
 
-With `peer=<name>`, restrict the peers array to that one. With `msg_id=<id>`, include a `msg_trace` block showing where that one message sits across inbox/sent + sidecar state.
+To trace one outbound message, stat its `verify_path` (returned by `mcp__choros__send`) directly — present ⟹ JSONL-confirmed delivery, absent ⟹ recipient bun did not confirm.
 
 ### `/choros whoami` — show this session's identity
 
@@ -234,7 +247,7 @@ Any `@<name-or-uuid-prefix>` token in a `send` / `broadcast` / `publish` body ge
 
 ### `/choros react <msg_id> <emoji>` — lightweight reaction
 
-Calls `mcp__choros__react msg_id:"..." emoji:"..."`. Original sender's agent gets a `<channel source="choros-reaction">` event. Use for thumbs-up / acknowledge / quick takes that don't deserve a full reply. msg_id is the id from your inbox (find it in `/choros inbox` output).
+Calls `mcp__choros__react msg_id:"..." emoji:"..." from_session:"<original-sender-session-id>"`. All three fields required — `from_session` is the original sender's session UUID (it's the `from_session` field on the inbox message you're reacting to) and tells choros where to drop the `.react` file. Original sender's agent gets a `<channel source="choros-reaction">` event. Use for thumbs-up / acknowledge / quick takes that don't deserve a full reply.
 
 ### Read receipts
 

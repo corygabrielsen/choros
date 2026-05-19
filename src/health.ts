@@ -1,13 +1,9 @@
 import { join } from 'node:path'
+import { DEAD_AGE_MS, LIVE_MAX_AGE_MS } from './constants.ts'
 import type { Context } from './effects.ts'
 import { findJsonlForSession } from './identity.ts'
 
-/** Heartbeat age threshold below which a peer is considered fresh. */
-export const LIVE_MAX_AGE_MS = 90_000
-
-/** Heartbeat age threshold above which the peer is classified `dead`
- *  regardless of pid-alive state. */
-export const DEAD_AGE_MS = 600_000
+export { DEAD_AGE_MS, LIVE_MAX_AGE_MS }
 
 /** Age of the recipient's CC JSONL last modification. Stale value =
  *  the agent hasn't taken a tool-loop turn recently. Distinct from

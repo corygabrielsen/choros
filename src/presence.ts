@@ -137,9 +137,10 @@ export async function emitBootRoster(
   )
 }
 
-/** Read a `.hello` / `.goodbye` file from OWN presence dir and emit a
- *  channel event to the agent. Returns whether the file was unlinked
- *  (which it is iff the push resolved). */
+/** Read a `.hello` / `.goodbye` / `.rename` file from OWN presence dir
+ *  and emit a channel event to the agent. The source file is always
+ *  unlinked after the attempt — fire-and-forget; a missed event
+ *  reappears on next boot or rename. */
 export async function emitPresence(
   ctx: Pick<Context, 'fs' | 'mcp' | 'clock' | 'proc'>,
   ownPresenceDir: string,
