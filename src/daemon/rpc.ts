@@ -1,6 +1,20 @@
+import { handleBroadcast } from '#choros/daemon/handlers/broadcast.ts'
 import { handleDeregister } from '#choros/daemon/handlers/deregister.ts'
+import { handleDoctor } from '#choros/daemon/handlers/doctor.ts'
 import { handleHeartbeat } from '#choros/daemon/handlers/heartbeat.ts'
+import { handleConfirmDelivery, handleMarkRead } from '#choros/daemon/handlers/inbox_ops.ts'
+import { handlePublish } from '#choros/daemon/handlers/publish.ts'
+import { handleReact } from '#choros/daemon/handlers/react.ts'
 import { type HandlerCtx, handleRegister } from '#choros/daemon/handlers/register.ts'
+import { handleSend } from '#choros/daemon/handlers/send.ts'
+import { handleSetIntent, handleSetStatus } from '#choros/daemon/handlers/set_state.ts'
+import { handleSubscribe, handleUnsubscribe } from '#choros/daemon/handlers/subscribe.ts'
+import {
+  handleJoinThread,
+  handleLeaveThread,
+  handleListThreads,
+  handleSendToThread,
+} from '#choros/daemon/handlers/threads.ts'
 import type { NotificationSink } from '#choros/daemon/sessions.ts'
 import {
   ERR_INTERNAL,
@@ -124,6 +138,36 @@ function dispatch(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): Rpc
         return handleDeregister(ctx, req.params)
       case 'choros.heartbeat':
         return handleHeartbeat(ctx, req.params)
+      case 'choros.send':
+        return handleSend(ctx, req.params)
+      case 'choros.broadcast':
+        return handleBroadcast(ctx, req.params)
+      case 'choros.publish':
+        return handlePublish(ctx, req.params)
+      case 'choros.subscribe':
+        return handleSubscribe(ctx, req.params)
+      case 'choros.unsubscribe':
+        return handleUnsubscribe(ctx, req.params)
+      case 'choros.react':
+        return handleReact(ctx, req.params)
+      case 'choros.set_status':
+        return handleSetStatus(ctx, req.params)
+      case 'choros.set_intent':
+        return handleSetIntent(ctx, req.params)
+      case 'choros.doctor':
+        return handleDoctor(ctx, req.params)
+      case 'choros.join_thread':
+        return handleJoinThread(ctx, req.params)
+      case 'choros.leave_thread':
+        return handleLeaveThread(ctx, req.params)
+      case 'choros.list_threads':
+        return handleListThreads(ctx, req.params)
+      case 'choros.send_to_thread':
+        return handleSendToThread(ctx, req.params)
+      case 'choros.confirm_delivery':
+        return handleConfirmDelivery(ctx, req.params)
+      case 'choros.mark_read':
+        return handleMarkRead(ctx, req.params)
       default:
         return { code: ERR_METHOD_NOT_FOUND, message: `unknown method: ${req.method}` }
     }
