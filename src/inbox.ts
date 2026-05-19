@@ -86,6 +86,12 @@ export interface InboxTargets {
   wedgePath: string
   inboxDir: string
   readDir: string
+  /** Lazy accessor for the cached path to OWN CC JSONL. Lets emit avoid
+   *  paying `findJsonlForSession` on every delivered message — the
+   *  identity layer already resolved it during `resolveMyNameCached`.
+   *  Returns null if the cache is unpopulated; emit falls back to the
+   *  on-demand lookup in that case. */
+  cachedOwnJsonl?: () => string | null
 }
 
 /**
@@ -356,8 +362,11 @@ async function emitInboxMessageInner(
 
   // Capture JSONL size BEFORE the push so the verify window includes any
   // bytes CC writes during the push's resolution (CC may flush the
-  // msg_id record at exactly that instant).
-  const jsonl = await findJsonlForSession(ctx, targets.projectsRoot, targets.me)
+  // msg_id record at exactly that instant). Prefer the cached own-jsonl
+  // path (populated by the identity layer at boot) over re-walking the
+  // projects root on every delivery.
+  const jsonl =
+    targets.cachedOwnJsonl?.() ?? (await findJsonlForSession(ctx, targets.projectsRoot, targets.me))
   const verifyStartSize = await jsonlSize(ctx, jsonl)
 
   const push = await pushChannelNotification(

@@ -432,6 +432,7 @@ watcherHandles.push(
           wedgePath: WEDGE_PATH,
           inboxDir: MY_INBOX,
           readDir: MY_READ,
+          cachedOwnJsonl: () => nameCache.jsonlPath,
         },
         wedge,
         droppedAcksEmitted,
