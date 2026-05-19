@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { atomicWrite } from './delivery.ts'
 import type { Context } from './effects.ts'
 import type { InboxMessage } from './inbox.ts'
+import { createKeyedMutex } from './mutex.ts'
 
 /** Per-thread on-disk layout (shared, not per-session):
  *
@@ -144,38 +145,10 @@ export async function readThread(
 // and even single-threaded JS sees concurrency at every await boundary —
 // two addMember calls for the same thread would each readMembers, then
 // each writeMembers, and the second write would clobber the first's
-// addition. Per-thread Promise chains serialize the read-write sequence.
-const threadMutationQueue = new Map<string, Promise<unknown>>()
-
-/** Per-op deadline for serialized thread mutations. A hung op would
- *  otherwise wedge the chain permanently; with the deadline, a stuck
- *  op rejects after N ms and subsequent queued ops proceed. */
-const THREAD_OP_TIMEOUT_MS = 30_000
-
-async function serializeOnThread<T>(rootId: string, op: () => Promise<T>): Promise<T> {
-  const prev = threadMutationQueue.get(rootId) ?? Promise.resolve()
-  const guardedOp = (): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`thread mutation timed out for ${rootId}`)),
-        THREAD_OP_TIMEOUT_MS,
-      )
-    })
-    return Promise.race([op(), timeout]).finally(() => {
-      if (timer) clearTimeout(timer)
-    })
-  }
-  const next = prev.then(guardedOp, guardedOp)
-  threadMutationQueue.set(rootId, next)
-  try {
-    return await next
-  } finally {
-    if (threadMutationQueue.get(rootId) === next) {
-      threadMutationQueue.delete(rootId)
-    }
-  }
-}
+// addition.
+const threadMutex = createKeyedMutex()
+const serializeOnThread = <T>(rootId: string, op: () => Promise<T>): Promise<T> =>
+  threadMutex.run(rootId, op)
 
 async function readMembers(
   ctx: Pick<Context, 'fs'>,

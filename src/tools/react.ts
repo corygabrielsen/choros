@@ -49,7 +49,12 @@ export async function handleReact(
   }
   const senderAcksDir = join(targets.stateRoot, senderSession, 'sent_acks')
   await ctx.fs.mkdir(senderAcksDir, { recursive: true })
-  const path = join(senderAcksDir, `${msgId}.react`)
+  // Filename keyed on (msg_id, reactor) so two peers reacting to the
+  // same message — or the same peer reacting twice — don't clobber one
+  // another's `.react` file. The sender's bun consumes all matching
+  // entries on its inotify pass.
+  const reactorTag = targets.me.slice(0, 8)
+  const path = join(senderAcksDir, `${msgId}.${reactorTag}.react`)
   const payload = JSON.stringify({
     msg_id: msgId,
     emoji,

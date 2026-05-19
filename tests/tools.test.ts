@@ -37,7 +37,7 @@ describe('handleSend', () => {
     const ctx = fakeContext()
     const r = await handleSend(ctx, sendTargets, { to: 'peer', body: 'hi' })
     expect(r.recipient_id).toBe('peer')
-    expect(r.msg_id).toMatch(/^\d{8}T\d{6}Z-/)
+    expect(r.msg_id).toMatch(/^\d{8}T\d{6}\d{3}Z-/)
     expect(ctx.fs.existsSync(`${STATE}/peer/inbox/${r.msg_id}.json`)).toBe(true)
     expect(ctx.fs.existsSync(`${STATE}/${ME}/sent/${r.msg_id}.json`)).toBe(true)
   })
@@ -85,7 +85,7 @@ describe('handleReact', () => {
       emoji: '👍',
       from_session: sender,
     })
-    expect(r.wrote_to).toBe(`${STATE}/${sender}/sent_acks/m1.react`)
+    expect(r.wrote_to).toBe(`${STATE}/${sender}/sent_acks/m1.${ME.slice(0, 8)}.react`)
     expect(ctx.fs.existsSync(r.wrote_to)).toBe(true)
   })
 

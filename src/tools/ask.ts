@@ -1,6 +1,6 @@
 import type { AskRegistry } from '../ask-registry.ts'
 import type { Context } from '../effects.ts'
-import { isSelf, resolveRecipient } from '../identity.ts'
+import { generateMessageId, isSelf, resolveRecipient } from '../identity.ts'
 import { asStringField, type InboxMessage } from '../inbox.ts'
 import { handleSend, type SendTargets } from './send.ts'
 
@@ -77,8 +77,7 @@ export async function handleAsk(
   // returning and registry.register() running, and notifyIfWaiting() would
   // find no waiter — the reply would be lost.
   const isoNow = ctx.clock.nowIso()
-  const tsId = isoNow.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
-  const msgId = `${tsId}-${targets.me.slice(0, 8)}`
+  const msgId = generateMessageId(targets.me, isoNow)
 
   return new Promise<AskResult>(resolve => {
     let settled = false

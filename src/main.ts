@@ -103,14 +103,23 @@ try {
 // Refuse to start if another live bun holds this identity. Without this,
 // two buns for the same session race on heartbeat writes, inbox watching,
 // and presence broadcasts. We use the heartbeat pid (not a separate lock
-// file) so a clean exit naturally clears the claim.
+// file) so a clean exit naturally clears the claim. After writing our own
+// claim we re-read the file and verify our pid is still there — this
+// converts the TOCTOU between read and write into a "last writer's
+// post-verification fails" loss for whichever bun came second.
 const LOCK_PATH = join(MY_ROOT, '.lock')
 async function takeLock(): Promise<void> {
   let holder: { pid?: number; started?: string } | null = null
   try {
     holder = JSON.parse(await ctx.fs.readFile(LOCK_PATH))
-  } catch {
-    /* no lock yet */
+  } catch (e: unknown) {
+    const code = (e as NodeJS.ErrnoException)?.code
+    if (code && code !== 'ENOENT') {
+      // EACCES / EIO / a corrupt-JSON SyntaxError — distinct from the
+      // expected "no lock yet" path. Surface so a misconfigured state
+      // root is visible rather than silently bypassed.
+      ctx.proc.stderr(`[choros] lock read failed (${code ?? e}); proceeding as if unlocked\n`)
+    }
   }
   if (holder && typeof holder.pid === 'number' && holder.pid !== ctx.proc.pid()) {
     if (await ctx.proc.pidAlive(holder.pid)) {
@@ -124,6 +133,20 @@ async function takeLock(): Promise<void> {
     LOCK_PATH,
     JSON.stringify({ pid: ctx.proc.pid(), started: new Date().toISOString() }),
   )
+  // Post-write verify: read the lock back and confirm our pid won. If
+  // another bun raced us and wrote after we did, exit — we lost.
+  try {
+    const after = JSON.parse(await ctx.fs.readFile(LOCK_PATH)) as { pid?: number }
+    if (after.pid !== ctx.proc.pid()) {
+      ctx.proc.stderr(
+        `[choros] lock race: pid ${after.pid ?? '?'} won the claim for ${ME}. Exiting.\n`,
+      )
+      ctx.proc.exit(1)
+    }
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    ctx.proc.stderr(`[choros] lock verify failed (${m}); proceeding without confirmation\n`)
+  }
 }
 await takeLock()
 

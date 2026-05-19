@@ -340,6 +340,15 @@ async function emitInboxMessageInner(
   if (!data) return { status: 'skipped' }
   if (askRegistry) askRegistry.notifyIfWaiting(data)
   const msgId = safeString(data.id) ?? ''
+  if (!msgId) {
+    // A missing msg_id is corrupt input — without it we can't dedup,
+    // can't write a `.dropped` ack, and can't track delivery. Skip
+    // entirely rather than bucket every empty-id message into the
+    // same dedup slot (which would silently suppress all subsequent
+    // ones).
+    ctx.proc.stderr(`[choros] ${src}: missing msg_id; skipping\n`)
+    return { status: 'skipped' }
+  }
   const meta = buildInboxMeta(data, targets.me, targets.myName, msgId)
 
   // Capture JSONL size BEFORE the push so the verify window includes any

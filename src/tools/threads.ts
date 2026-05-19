@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
-import { sanitizeId } from '../identity.ts'
+import { generateMessageId, sanitizeId } from '../identity.ts'
 import { asStringField, enforceBodyCap, type InboxMessage, validateSpeechAct } from '../inbox.ts'
 import {
   addMember,
@@ -110,8 +110,7 @@ export async function handleSendToThread(
   await addMember(ctx, { stateRoot: targets.stateRoot }, threadId, targets.me)
 
   const isoNow = ctx.clock.nowIso()
-  const ts = isoNow.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
-  const id = `${ts}-${targets.me.slice(0, 8)}`
+  const id = generateMessageId(targets.me, isoNow)
   const msg: InboxMessage = {
     id,
     from_session: targets.me,
@@ -122,7 +121,9 @@ export async function handleSendToThread(
     ts: isoNow,
     thread_id: threadId,
     ...(act ? { act } : {}),
-    ...(args.in_reply_to ? { in_reply_to: args.in_reply_to } : {}),
+    ...(typeof args.in_reply_to === 'string' && args.in_reply_to.trim()
+      ? { in_reply_to: args.in_reply_to.trim() }
+      : {}),
   }
 
   await appendToThread(ctx, { stateRoot: targets.stateRoot }, threadId, msg)

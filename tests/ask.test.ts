@@ -89,7 +89,7 @@ describe('handleAsk', () => {
     const r = await askPromise
     expect(r.status).toBe('timeout')
     if (r.status === 'timeout') {
-      expect(r.question_msg_id).toMatch(/^\d{8}T\d{6}Z-/)
+      expect(r.question_msg_id).toMatch(/^\d{8}T\d{6}\d{3}Z-/)
     }
   })
 

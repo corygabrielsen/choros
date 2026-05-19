@@ -6,6 +6,27 @@ import type { Context } from './effects.ts'
  *  from legacy cwd-encoded identifiers. */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** Monotonic per-process counter ensuring msg_id uniqueness even at
+ *  sub-millisecond rates. Combined with the ms-precision timestamp and
+ *  session prefix, makes intra-second collisions impossible. */
+let messageIdCounter = 0
+
+/** Build a filesystem-safe message id that is unique across the
+ *  (session, ms, counter) triple. Format:
+ *  `YYYYMMDDThhmmssfffZ-<base36-counter>-<8-char-session-prefix>`.
+ *
+ *  - `YYYYMMDDThhmmssfffZ`: collapsed ISO timestamp preserving
+ *    milliseconds (the bug-hunt found that the previous format
+ *    stripped ms and produced same-second collisions).
+ *  - `base36-counter`: per-process monotonic counter so even
+ *    same-millisecond sends from the same bun are distinct.
+ *  - 8-char session prefix: cross-session disambiguation. */
+export function generateMessageId(me: string, isoNow: string): string {
+  messageIdCounter = (messageIdCounter + 1) & 0xffffffff
+  const ts = isoNow.replace(/[-:]/g, '').replace(/\.(\d+)Z$/, '$1Z')
+  return `${ts}-${messageIdCounter.toString(36)}-${me.slice(0, 8)}`
+}
+
 /** Validate an identifier that's about to become part of a filesystem path.
  *  Used at every boundary where untrusted input (msg_id, recipient handle,
  *  env override, body-derived from_session) flows into join(stateRoot, …). */

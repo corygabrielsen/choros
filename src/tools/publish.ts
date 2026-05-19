@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
-import { isSelf, listKnownInstances, parseMentions } from '../identity.ts'
+import { generateMessageId, isSelf, listKnownInstances, parseMentions } from '../identity.ts'
 import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 import { listSubscribers } from './subscribe.ts'
 
@@ -70,8 +70,7 @@ export async function handlePublish(
     body,
   )
   const isoNow = ctx.clock.nowIso()
-  const ts = isoNow.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
-  const id = `${ts}-${targets.me.slice(0, 8)}`
+  const id = generateMessageId(targets.me, isoNow)
   const msgBase = {
     id,
     from_session: targets.me,

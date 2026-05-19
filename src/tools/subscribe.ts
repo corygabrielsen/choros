@@ -1,11 +1,19 @@
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { sanitizeId } from '../identity.ts'
+import { createKeyedMutex } from '../mutex.ts'
 
 /** Path to the per-session `.subscriptions` file. */
 export interface SubscribeTargets {
   subscriptionsPath: string
 }
+
+// `.subscriptions` is read-modify-write: subscribe reads the current
+// set, adds the topic, and writes the merged set. Concurrent
+// subscribe calls without serialization can each read the same baseline
+// and one overwrites the other's addition. Keyed mutex on the
+// subscriptions path serializes them.
+const subscriptionsMutex = createKeyedMutex()
 
 async function readSubscriptions(ctx: Pick<Context, 'fs'>, path: string): Promise<Set<string>> {
   try {
@@ -47,10 +55,12 @@ export async function handleSubscribe(
 ): Promise<{ subscribed: string[] }> {
   const t = topic.trim()
   if (!t) throw new Error('subscribe: "topic" is required')
-  const set = await readSubscriptions(ctx, targets.subscriptionsPath)
-  set.add(t)
-  await writeSubscriptions(ctx, targets.subscriptionsPath, set)
-  return { subscribed: [...set].sort() }
+  return await subscriptionsMutex.run(targets.subscriptionsPath, async () => {
+    const set = await readSubscriptions(ctx, targets.subscriptionsPath)
+    set.add(t)
+    await writeSubscriptions(ctx, targets.subscriptionsPath, set)
+    return { subscribed: [...set].sort() }
+  })
 }
 
 /**
@@ -65,10 +75,12 @@ export async function handleUnsubscribe(
 ): Promise<{ subscribed: string[] }> {
   const t = topic.trim()
   if (!t) throw new Error('unsubscribe: "topic" is required')
-  const set = await readSubscriptions(ctx, targets.subscriptionsPath)
-  set.delete(t)
-  await writeSubscriptions(ctx, targets.subscriptionsPath, set)
-  return { subscribed: [...set].sort() }
+  return await subscriptionsMutex.run(targets.subscriptionsPath, async () => {
+    const set = await readSubscriptions(ctx, targets.subscriptionsPath)
+    set.delete(t)
+    await writeSubscriptions(ctx, targets.subscriptionsPath, set)
+    return { subscribed: [...set].sort() }
+  })
 }
 
 /** Test whether a peer is subscribed to a topic. Used by

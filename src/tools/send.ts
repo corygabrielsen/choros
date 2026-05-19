@@ -2,7 +2,13 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { type RecipientHealth, recipientLastAgentTurnAgeMs, recipientLiveness } from '../health.ts'
-import { isSelf, parseMentions, resolveRecipient, sanitizeId } from '../identity.ts'
+import {
+  generateMessageId,
+  isSelf,
+  parseMentions,
+  resolveRecipient,
+  sanitizeId,
+} from '../identity.ts'
 import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 
 /** Inputs accepted by `mcp__choros__send`. */
@@ -83,14 +89,13 @@ export async function handleSend(
     body,
   )
   const isoNow = ctx.clock.nowIso()
-  const ts = isoNow.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
   // Caller-supplied msg_id (handleAsk uses this so the waiter can be
   // registered before the inbox file is written). Sanitize aggressively
   // since it flows into both the sender's `sent/` filename AND the
   // recipient's `inbox/` filename via path join.
   const id = args.msg_id
     ? sanitizeId(args.msg_id, 'send.msg_id')
-    : `${ts}-${targets.me.slice(0, 8)}`
+    : generateMessageId(targets.me, isoNow)
   const msg: Record<string, unknown> = {
     id,
     from_session: targets.me,
