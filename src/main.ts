@@ -5,7 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { emitAck } from './acks.ts'
 import { AskRegistry } from './ask-registry.ts'
-import type { WedgeState } from './delivery.ts'
+import { cleanupOrphanTmpFiles, type WedgeState } from './delivery.ts'
 import { type Context, type Mcp, realContext } from './effects.ts'
 import {
   type AgentState,
@@ -46,9 +46,19 @@ const ctx: Context = realContext(mcpAdapter)
 process.stdout.on('error', (e: NodeJS.ErrnoException) => {
   if (e?.code === 'EPIPE') {
     ctx.proc.stderr('[choros] stdout EPIPE — exiting so CC respawns\n')
-    ctx.proc.exit(0)
+    void shutdownAsync().finally(() => ctx.proc.exit(0))
+    return
   }
   ctx.proc.stderr(`[choros] stdout error: ${e}\n`)
+  void shutdownAsync().finally(() => ctx.proc.exit(1))
+})
+
+// stderr EPIPE would otherwise emit an unhandled 'error' event and
+// crash the bun without running shutdownAsync. We can't usefully log
+// the failure (stderr is the channel that's broken) but we can still
+// run the async shutdown so peers see a goodbye.
+process.stderr.on('error', () => {
+  void shutdownAsync().finally(() => ctx.proc.exit(1))
 })
 
 const STATE_ROOT = resolveStateRoot(ctx)
@@ -68,6 +78,15 @@ const SUBSCRIPTIONS_PATH = join(MY_ROOT, '.subscriptions')
 
 for (const dir of [MY_INBOX, MY_READ, MY_SENT, MY_ACKS, MY_PRESENCE]) {
   await ctx.fs.mkdir(dir, { recursive: true })
+}
+
+// Sweep orphan `*.tmp` files left by peers (or by this session) whose
+// atomicWrite was killed mid-rename. Peers write to our inbox/presence/
+// sent_acks dirs, and a force-killed peer leaves us holding the tmp.
+// Unlinking files whose embedded writer-pid is dead is safe.
+for (const dir of [MY_INBOX, MY_ACKS, MY_PRESENCE]) {
+  const removed = await cleanupOrphanTmpFiles(ctx, dir)
+  if (removed > 0) ctx.proc.stderr(`[choros] swept ${removed} orphan .tmp file(s) from ${dir}\n`)
 }
 
 // Refuse to start if another live bun holds this identity. Without this,
@@ -512,14 +531,20 @@ const watchers = [inboxWatcher, presenceWatcher, ackWatcher]
 let shuttingDown = false
 
 // Synchronous part of shutdown — safe to call from process 'exit' handler
-// where async work cannot complete. Stops the heartbeat tick and kills
-// inotify children so they don't outlive us.
+// where async work cannot complete. Stops the heartbeat tick, kills
+// inotify children, and releases the identity lock so a fresh bun for
+// this session can start without manual cleanup.
 function shutdownSync(): void {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(heartbeatInterval)
   clearInterval(sweepInterval)
   for (const w of watchers) w.kill()
+  try {
+    ctx.fs.unlinkSync(LOCK_PATH)
+  } catch {
+    /* lock already gone or never claimed */
+  }
 }
 
 let shutdownAsyncPromise: Promise<void> | null = null
@@ -560,12 +585,11 @@ function shutdownAsync(): Promise<void> {
 }
 
 process.on('exit', shutdownSync)
-process.on('SIGINT', () => {
-  void shutdownAsync().finally(() => ctx.proc.exit(0))
-})
-process.on('SIGTERM', () => {
-  void shutdownAsync().finally(() => ctx.proc.exit(0))
-})
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  process.on(signal, () => {
+    void shutdownAsync().finally(() => ctx.proc.exit(0))
+  })
+}
 
 ctx.proc.stderr(
   `[choros] v0.28 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +

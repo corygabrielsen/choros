@@ -104,6 +104,44 @@ export async function atomicWrite(
   }
 }
 
+/** Regex matching the tmp filename pattern produced by {@link atomicWrite}:
+ *  `<destination>.<pid>.<counter>.tmp`. Used by orphan-tmp cleanup to
+ *  recover the writer's pid. */
+const TMP_FILE_RE = /\.(\d+)\.\d+\.tmp$/
+
+/** Scan a directory for orphaned `*.tmp` files left behind when a peer's
+ *  bun was killed mid-atomicWrite. Files whose embedded writer-pid is
+ *  no longer alive are unlinked. Returns the number unlinked. */
+export async function cleanupOrphanTmpFiles(
+  ctx: Pick<Context, 'fs' | 'proc'>,
+  dir: string,
+): Promise<number> {
+  let entries: string[]
+  try {
+    entries = await ctx.fs.readdir(dir)
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const name of entries) {
+    const m = TMP_FILE_RE.exec(name)
+    if (!m) continue
+    const pidStr = m[1]
+    if (!pidStr) continue
+    const pid = Number.parseInt(pidStr, 10)
+    if (!Number.isFinite(pid)) continue
+    if (pid === ctx.proc.pid()) continue
+    if (await ctx.proc.pidAlive(pid)) continue
+    try {
+      await ctx.fs.unlink(`${dir}/${name}`)
+      removed++
+    } catch {
+      /* raced with another janitor, or fs error — skip */
+    }
+  }
+  return removed
+}
+
 /** Poll an own-CC JSONL for a substring match on msg_id. Uses an append-only
  *  window — the search only considers bytes written AFTER the call started,
  *  so an older record that happened to embed the msg_id literal cannot
