@@ -116,15 +116,14 @@ export async function handleSendToThread(
     id,
     from_session: targets.me,
     from_name: targets.myName,
-    from_host: undefined,
+    from_host: ctx.env.hostname(),
     from_cwd: ctx.proc.cwd(),
     body,
     ts: isoNow,
+    thread_id: threadId,
     ...(act ? { act } : {}),
     ...(args.in_reply_to ? { in_reply_to: args.in_reply_to } : {}),
   }
-  ;(msg as Record<string, unknown>).thread_id = threadId
-  ;(msg as Record<string, unknown>).from_host = ctx.env.hostname()
 
   await appendToThread(ctx, { stateRoot: targets.stateRoot }, threadId, msg)
   await ctx.fs.mkdir(targets.mySentDir, { recursive: true })

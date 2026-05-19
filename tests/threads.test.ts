@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   addMember,
   appendToThread,
+  corruptMessagesIn,
   ensureThread,
   listMembers,
   listThreadsFor,
@@ -53,6 +54,16 @@ describe('thread storage', () => {
     expect(ctx.fs.existsSync(`${STATE}/.threads/root-1/msgs/m1.json`)).toBe(true)
     const back = JSON.parse(await ctx.fs.readFile(`${STATE}/.threads/root-1/msgs/m1.json`))
     expect(back.id).toBe('m1')
+  })
+
+  test('readThread surfaces corrupt-msg count via corruptMessagesIn', async () => {
+    const ctx = fakeContext()
+    await appendToThread(ctx, tt, 'root-corrupt', { id: 'good', body: '', ts: 'T1' })
+    // Manually write an unparseable msg file alongside the good one.
+    await ctx.fs.writeFile(`${STATE}/.threads/root-corrupt/msgs/bad.json`, 'not json')
+    const msgs = await readThread(ctx, tt, 'root-corrupt')
+    expect(msgs.map(m => m.id)).toEqual(['good'])
+    expect(corruptMessagesIn('root-corrupt')).toBe(1)
   })
 
   test('readThread returns messages sorted by ts', async () => {
@@ -166,6 +177,15 @@ describe('handleListThreads', () => {
     await addMember(ctx, tt, 'r3', PEER_A)
     const out = await handleListThreads(ctx, { stateRoot: STATE, me: ME })
     expect(out.map(t => t.root_msg_id)).toEqual(['r2', 'r1'])
+  })
+
+  test('sort is deterministic when threads have no messages (tiebreaker)', async () => {
+    const ctx = fakeContext()
+    await addMember(ctx, tt, 'r-z', ME)
+    await addMember(ctx, tt, 'r-a', ME)
+    const out = await handleListThreads(ctx, { stateRoot: STATE, me: ME })
+    // Both have no last_ts; tiebreaker is root_msg_id alphabetical
+    expect(out.map(t => t.root_msg_id)).toEqual(['r-a', 'r-z'])
   })
 
   test('listThreadsFor returns message_count + member_count', async () => {

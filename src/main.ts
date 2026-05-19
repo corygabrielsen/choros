@@ -33,7 +33,7 @@ import {
   handleSendToThread,
 } from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.26.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.27.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -155,7 +155,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }))
 
+// In-flight tool handler promises tracked so shutdown can drain them.
+// Without this, SIGTERM mid-tool would `process.exit(0)` while a
+// handleSend was awaiting an atomicWrite — the file would be left as
+// a stranded .tmp on disk. The shutdown drainer awaits these with a
+// hard deadline so a wedged handler doesn't block exit indefinitely.
+const inFlightHandlers = new Set<Promise<unknown>>()
+
 server.setRequestHandler(CallToolRequestSchema, async req => {
+  const work = handleToolRequest(req)
+  inFlightHandlers.add(work)
+  try {
+    return await work
+  } finally {
+    inFlightHandlers.delete(work)
+  }
+})
+
+async function handleToolRequest(
+  req: Parameters<Parameters<typeof server.setRequestHandler<typeof CallToolRequestSchema>>[1]>[0],
+): Promise<{ content: Array<{ type: string; text: string }> }> {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
   switch (req.params.name) {
     case 'send': {
@@ -272,7 +291,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
     default:
       throw new Error(`unknown tool: ${req.params.name}`)
   }
-})
+}
 
 async function tickHeartbeat(): Promise<void> {
   const previousName = myName
@@ -488,6 +507,16 @@ async function shutdownAsync(): Promise<void> {
   if (shutdownAsyncPromise) return shutdownAsyncPromise
   shutdownAsyncPromise = (async (): Promise<void> => {
     shutdownSync()
+    // Drain in-flight tool handlers with a hard deadline so a wedged
+    // handler (stuck on a hung await) can't block exit indefinitely.
+    // 2s mirrors the goodbye broadcast deadline.
+    if (inFlightHandlers.size > 0) {
+      ctx.proc.stderr(`[choros] draining ${inFlightHandlers.size} in-flight handler(s)\n`)
+      await Promise.race([
+        Promise.allSettled([...inFlightHandlers]),
+        new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+      ])
+    }
     try {
       const targets = { stateRoot: STATE_ROOT, projectsRoot: PROJECTS_ROOT, me: ME, myName }
       await Promise.race([
@@ -511,7 +540,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.26 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.27 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )
