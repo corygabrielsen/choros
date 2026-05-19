@@ -51,8 +51,8 @@ export async function isLivePeer(
   peerId: string,
 ): Promise<boolean> {
   try {
-    const raw = await ctx.fs.readFile(join(stateRoot, peerId, '.heartbeat'))
-    const s = await ctx.fs.stat(join(stateRoot, peerId, '.heartbeat'))
+    const path = join(stateRoot, peerId, '.heartbeat')
+    const [raw, s] = await Promise.all([ctx.fs.readFile(path), ctx.fs.stat(path)])
     if (ctx.clock.nowMs() - s.mtimeMs > LIVE_MAX_AGE_MS) return false
     let hb: unknown
     try {
@@ -114,11 +114,12 @@ export async function recipientLiveness(
 ): Promise<RecipientHealth> {
   let heartbeatAgeMs: number | undefined
   let peerPid: number | undefined
+  const heartbeatPath = join(stateRoot, recipientId, '.heartbeat')
   try {
-    const s = await ctx.fs.stat(join(stateRoot, recipientId, '.heartbeat'))
+    const [raw, s] = await Promise.all([ctx.fs.readFile(heartbeatPath), ctx.fs.stat(heartbeatPath)])
     heartbeatAgeMs = ctx.clock.nowMs() - s.mtimeMs
     try {
-      const hb = JSON.parse(await ctx.fs.readFile(join(stateRoot, recipientId, '.heartbeat')))
+      const hb = JSON.parse(raw)
       if (typeof hb?.pid === 'number') peerPid = hb.pid
     } catch {
       /* malformed heartbeat */

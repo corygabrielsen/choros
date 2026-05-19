@@ -191,7 +191,9 @@ export async function emitInboxMessage(
   const archived = join(targets.readDir, filename)
   if (ctx.fs.existsSync(sidecar)) return { status: 'skipped' }
   if (ctx.fs.existsSync(archived)) return { status: 'skipped' }
-  if (!ctx.fs.existsSync(src)) return { status: 'skipped' }
+  // No existsSync(src) guard — readInboxMessage returns null on ENOENT,
+  // and emitInboxMessageInner translates that to `{ status: 'skipped' }`.
+  // One redundant syscall per inbox dispatch removed.
 
   inFlight.add(filename)
   try {

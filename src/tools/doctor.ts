@@ -67,12 +67,15 @@ export async function handleDoctor(
       .filter(k => k.id !== targets.me)
       .map(async k => {
         const dir = join(targets.stateRoot, k.id)
+        const heartbeatPath = join(dir, '.heartbeat')
         let heartbeatAgeMs: number | undefined
         let peerPid: number | undefined
         try {
-          const s = await ctx.fs.stat(join(dir, '.heartbeat'))
+          const [raw, s] = await Promise.all([
+            ctx.fs.readFile(heartbeatPath),
+            ctx.fs.stat(heartbeatPath),
+          ])
           heartbeatAgeMs = ctx.clock.nowMs() - s.mtimeMs
-          const raw = await ctx.fs.readFile(join(dir, '.heartbeat'))
           const hb = JSON.parse(raw) as { pid?: number }
           if (typeof hb?.pid === 'number') peerPid = hb.pid
         } catch {

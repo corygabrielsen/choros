@@ -40,18 +40,20 @@ export interface WatcherHandle {
 }
 
 /** Dispatch up to `limit` items concurrently through `op`, swallowing
- *  per-item errors (op is expected to log its own failures). */
+ *  per-item errors (op is expected to log its own failures). Uses a
+ *  shared index pointer instead of `Array.shift()` so dispatch is O(1)
+ *  per item rather than O(N) per item on the queue's leading edge. */
 async function runWithLimit<T>(
   items: T[],
   limit: number,
   op: (item: T) => Promise<unknown>,
 ): Promise<void> {
   if (items.length === 0) return
-  const queue = items.slice()
-  const workers: Promise<void>[] = []
+  let cursor = 0
   const worker = async (): Promise<void> => {
-    while (queue.length > 0) {
-      const item = queue.shift()
+    while (cursor < items.length) {
+      const idx = cursor++
+      const item = items[idx]
       if (item === undefined) return
       try {
         await op(item)
@@ -61,12 +63,16 @@ async function runWithLimit<T>(
     }
   }
   const n = Math.min(limit, items.length)
+  const workers: Promise<void>[] = []
   for (let i = 0; i < n; i++) workers.push(worker())
   await Promise.all(workers)
 }
 
 /** Iterate `dir`, dropping dotfiles, and dispatch each remaining filename
- *  through {@link WatcherConfig.emit} with bounded concurrency. */
+ *  through {@link WatcherConfig.emit} with bounded concurrency. The
+ *  emit fns are idempotent and skip files they've already finished
+ *  with (e.g. inbox emit checks the `.seen` sidecar), so re-dispatch
+ *  during a periodic sweep is cheap. */
 async function dispatchExisting(
   ctx: Pick<Context, 'fs' | 'proc'>,
   config: WatcherConfig,
@@ -178,13 +184,23 @@ export function setupWatcher(
     })
   }
   let sweepHandle: ReturnType<typeof setInterval> | null = null
+  let sweepStartTimer: ReturnType<typeof setTimeout> | null = null
   if (config.sweepIntervalMs > 0) {
-    sweepHandle = setInterval(sweepTick, config.sweepIntervalMs)
-    sweepHandle.unref?.()
+    // Jitter the first tick across [0, sweepIntervalMs) so three
+    // watchers booted within microseconds don't fire their sweeps in
+    // lock-step every minute. Avoids sawtooth latency spikes.
+    const initialDelay = Math.floor(Math.random() * config.sweepIntervalMs)
+    sweepStartTimer = setTimeout(() => {
+      sweepHandle = setInterval(sweepTick, config.sweepIntervalMs)
+      sweepHandle.unref?.()
+      sweepTick()
+    }, initialDelay)
+    sweepStartTimer.unref?.()
   }
 
   return {
     stop(): void {
+      if (sweepStartTimer) clearTimeout(sweepStartTimer)
       if (sweepHandle) clearInterval(sweepHandle)
       inotify?.kill()
     },
