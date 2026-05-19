@@ -16,8 +16,8 @@ CLAUDE_CFG="$HOME/.claude.json"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/choros"
 CHOROS_HOME="$HOME/code/choros"
 
-if [ ! -f "$CHOROS_HOME/server.ts" ]; then
-  echo "ERROR: $CHOROS_HOME/server.ts not found — staging missing."
+if [ ! -f "$CHOROS_HOME/src/main.ts" ]; then
+  echo "ERROR: $CHOROS_HOME/src/main.ts not found — staging missing."
   exit 1
 fi
 
@@ -28,7 +28,7 @@ echo "backup: $CLAUDE_CFG.bak.$ts"
 
 # 2. Rewrite MCP registration: add choros, remove msg
 tmp=$(mktemp)
-jq --arg path "$CHOROS_HOME/server.ts" '
+jq --arg path "$CHOROS_HOME/src/main.ts" '
   .mcpServers.choros = {
     type: "stdio",
     command: "bun",
@@ -38,7 +38,7 @@ jq --arg path "$CHOROS_HOME/server.ts" '
   | del(.mcpServers.msg)
 ' "$CLAUDE_CFG" > "$tmp"
 mv "$tmp" "$CLAUDE_CFG"
-echo "MCP registration: msg → choros (path: $CHOROS_HOME/server.ts)"
+echo "MCP registration: msg → choros (path: $CHOROS_HOME/src/main.ts)"
 
 # 3. Symlink skill into Claude's skill dir
 mkdir -p "$HOME/.claude/skills"
@@ -63,5 +63,5 @@ echo "state dir: $STATE_DIR"
 
 echo ""
 echo "Done. Start a new Claude Code session."
-echo "On boot: bun spawns from $CHOROS_HOME/server.ts; state lands in $STATE_DIR."
-echo "Verify:  pgrep -af 'choros/server.ts'"
+echo "On boot: bun spawns from $CHOROS_HOME/src/main.ts; state lands in $STATE_DIR."
+echo "Verify:  pgrep -af 'choros/src/main.ts'"
