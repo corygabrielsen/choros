@@ -1,0 +1,196 @@
+import { join } from 'node:path'
+import type { Context } from './effects.ts'
+
+export const PUSH_TIMEOUT_MS = 5_000
+export const JSONL_VERIFY_TIMEOUT_MS = 5_000
+export const JSONL_VERIFY_POLL_MS = 250
+export const WEDGE_TIMEOUT_THRESHOLD = 3
+
+export interface TimeoutResult {
+  status: 'ok' | 'timeout'
+}
+
+/** Wrap a promise with a timeout. The setTimeout is cleared as soon as the
+ *  promise settles — no zombie timers accumulate on the hot path.
+ *  Rejections are surfaced via ctx.proc.stderr (caller logs them once)
+ *  rather than swallowed via .then(()=>'ok').catch antipattern. */
+export async function withTimeout<T>(
+  ctx: Pick<Context, 'clock' | 'proc'>,
+  task: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<'ok' | 'timeout'> {
+  let cleared = false
+  let timerHandle: { clear(): void } | undefined
+  const timeoutP = new Promise<'timeout'>(resolve => {
+    timerHandle = ctx.clock.setTimeout(() => {
+      if (!cleared) resolve('timeout')
+    }, timeoutMs)
+  })
+  try {
+    const result = await Promise.race<'ok' | 'timeout'>([
+      task.then(
+        () => 'ok' as const,
+        err => {
+          const message = err instanceof Error ? err.message : String(err)
+          ctx.proc.stderr(`[choros] ${label} rejected: ${message}\n`)
+          return 'ok' as const
+        },
+      ),
+      timeoutP,
+    ])
+    return result
+  } finally {
+    cleared = true
+    timerHandle?.clear()
+  }
+}
+
+/** Tmp+rename so concurrent readers never see a half-written payload. */
+export async function atomicWrite(
+  ctx: Pick<Context, 'fs' | 'proc'>,
+  path: string,
+  content: string,
+): Promise<void> {
+  const tmp = `${path}.${ctx.proc.pid()}.tmp`
+  await ctx.fs.writeFile(tmp, content)
+  await ctx.fs.rename(tmp, path)
+}
+
+/** Poll an own-CC JSONL for a substring match on msg_id. Uses an append-only
+ *  window — the search only considers bytes written AFTER the call started,
+ *  so an older record that happened to embed the msg_id literal cannot
+ *  false-positive. Returns true on first match within `timeoutMs`. */
+export async function verifyJsonlReceipt(
+  ctx: Pick<Context, 'fs' | 'clock'>,
+  jsonl: string | null,
+  msgId: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (!msgId) return false
+  if (!jsonl) return true
+  let startSize: number
+  try {
+    startSize = (await ctx.fs.stat(jsonl)).size
+  } catch {
+    startSize = 0
+  }
+  const deadline = ctx.clock.nowMs() + timeoutMs
+  while (ctx.clock.nowMs() < deadline) {
+    try {
+      const s = await ctx.fs.stat(jsonl)
+      if (s.size > startSize) {
+        const raw = await ctx.fs.readFile(jsonl)
+        const tail = raw.length > startSize ? raw.slice(startSize) : ''
+        if (tail.includes(msgId)) return true
+      }
+    } catch {
+      /* keep polling */
+    }
+    await waitMs(ctx, JSONL_VERIFY_POLL_MS)
+  }
+  return false
+}
+
+function waitMs(ctx: Pick<Context, 'clock'>, ms: number): Promise<void> {
+  return new Promise(resolve => {
+    ctx.clock.setTimeout(() => resolve(), ms)
+  })
+}
+
+export interface WedgeState {
+  consecutiveTimeouts: number
+}
+
+/** Push a channel notification with timeout + wedge bookkeeping. On `ok`,
+ *  consecutiveTimeouts resets to 0 and clearWedge() is invoked. On timeout,
+ *  it increments and `.wedged` is written after WEDGE_TIMEOUT_THRESHOLD. */
+export async function pushChannelNotification(
+  ctx: Pick<Context, 'mcp' | 'clock' | 'proc' | 'fs'>,
+  state: WedgeState,
+  wedgePath: string,
+  msgId: string,
+  content: string,
+  meta: Record<string, string>,
+): Promise<'ok' | 'timeout'> {
+  const result = await withTimeout(
+    ctx,
+    ctx.mcp.notify('notifications/claude/channel', { content, meta }),
+    PUSH_TIMEOUT_MS,
+    `push msg_id=${msgId}`,
+  )
+  if (result === 'ok') {
+    if (state.consecutiveTimeouts > 0) {
+      ctx.proc.stderr(
+        `[choros] push resolved — clearing wedge (was ${state.consecutiveTimeouts})\n`,
+      )
+      state.consecutiveTimeouts = 0
+      try {
+        await ctx.fs.unlink(wedgePath)
+      } catch {
+        /* not wedged */
+      }
+    }
+    return 'ok'
+  }
+  state.consecutiveTimeouts++
+  ctx.proc.stderr(
+    `[choros] push timed out for msg_id=${msgId} (consecutive=${state.consecutiveTimeouts})\n`,
+  )
+  if (state.consecutiveTimeouts >= WEDGE_TIMEOUT_THRESHOLD) {
+    const payload = JSON.stringify({
+      pid: ctx.proc.pid(),
+      detected_at: ctx.clock.nowIso(),
+      consecutive_timeouts: state.consecutiveTimeouts,
+      pending_msg_ids: [msgId],
+    })
+    try {
+      await atomicWrite(ctx, wedgePath, payload)
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e)
+      ctx.proc.stderr(`[choros] wedge marker write failed: ${m}\n`)
+    }
+  }
+  return 'timeout'
+}
+
+export interface AckTargets {
+  stateRoot: string
+  me: string
+  myName: string
+}
+
+/** Drop a tiny ack file in the sender's sent_acks/ dir. Idempotent across
+ *  msg_id: if any ack-type file already exists for this msg_id, skip the
+ *  write. Cross-status dedup: a `.ack` blocks a future `.dropped` and vice
+ *  versa — first observation wins. Uses tmp+rename. */
+export async function writeAckToSender(
+  ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
+  targets: AckTargets,
+  msg: { from_session?: unknown; id?: unknown },
+  status: 'delivered' | 'dropped',
+  recipientPid: number,
+): Promise<'written' | 'skipped'> {
+  const fromSession = String(msg.from_session ?? '')
+  const msgId = String(msg.id ?? '')
+  if (!fromSession || !msgId) return 'skipped'
+  if (fromSession === targets.me) return 'skipped'
+  const ext = status === 'delivered' ? 'ack' : 'dropped'
+  const otherExt = ext === 'ack' ? 'dropped' : 'ack'
+  const senderAcksDir = join(targets.stateRoot, fromSession, 'sent_acks')
+  await ctx.fs.mkdir(senderAcksDir, { recursive: true })
+  const path = join(senderAcksDir, `${msgId}.${ext}`)
+  if (ctx.fs.existsSync(path)) return 'skipped'
+  if (ctx.fs.existsSync(join(senderAcksDir, `${msgId}.${otherExt}`))) return 'skipped'
+  const payload = JSON.stringify({
+    msg_id: msgId,
+    status,
+    from_session: fromSession,
+    to_session: targets.me,
+    to_name: targets.myName,
+    verified_at: ctx.clock.nowIso(),
+    recipient_pid: recipientPid,
+  })
+  await atomicWrite(ctx, path, payload)
+  return 'written'
+}
