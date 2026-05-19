@@ -4,12 +4,14 @@ import type { Context } from '../effects.ts'
 import { isSelf, sanitizeId } from '../identity.ts'
 import { asStringField } from '../inbox.ts'
 
+/** Inputs accepted by `mcp__choros__react`. */
 export interface ReactArgs {
   msg_id?: string
   emoji?: string
   from_session?: string
 }
 
+/** Paths + identity that {@link handleReact} needs. */
 export interface ReactTargets {
   stateRoot: string
   me: string

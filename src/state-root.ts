@@ -14,7 +14,13 @@ export function resolveStateRoot(ctx: Pick<Context, 'env'>): string {
   return join(ctx.env.homedir(), '.local', 'state', 'choros')
 }
 
+/**
+ * Path to Claude Code's per-project transcript directory.
+ *
+ * @remarks
+ * Anthropic owns `~/.claude/projects/`; choros reads from it (to discover
+ * session JSONLs and resolve display names) but never writes there.
+ */
 export function projectsRoot(ctx: Pick<Context, 'env'>): string {
   return join(ctx.env.homedir(), '.claude', 'projects')
 }
-// trivial

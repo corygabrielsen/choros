@@ -1,6 +1,8 @@
 import { join } from 'node:path'
 import type { Context } from './effects.ts'
 
+/** RFC 4122 UUID shape — used to distinguish CC session identities
+ *  from legacy cwd-encoded identifiers. */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Default: a heartbeat mtime ≤ this is "fresh". The actual production
@@ -29,6 +31,8 @@ export function sanitizeId(input: unknown, label: string): string {
   return input
 }
 
+/** Resolved session identity. See {@link resolveIdentity} for the
+ *  lookup order. */
 export interface Identity {
   /** This session's id used as the FS dirname (UUID or override). */
   me: string
@@ -132,6 +136,9 @@ export async function newestSessionJsonl(
   return candidates[0]?.id ?? null
 }
 
+/** Encode a filesystem path the way Claude Code names its per-project
+ *  state directories: replace `/` with `-`. The transform is the inverse
+ *  of CC's encoding so we can locate the project dir from a cwd. */
 export function encodedCwd(cwd: string): string {
   return cwd.replace(/\//g, '-')
 }
@@ -210,6 +217,13 @@ export async function readDisplayNameForJsonl(
   return aiTitleFallback
 }
 
+/**
+ * Resolve this session's display name without caching. Reads the JSONL
+ * each call; prefer {@link resolveMyNameCached} on hot paths.
+ *
+ * @returns The custom title set via `/rename`, falling back to the
+ *   auto-generated ai-title, falling back to the UUID prefix.
+ */
 export async function resolveMyName(
   ctx: Pick<Context, 'fs' | 'env' | 'proc'>,
   identity: Identity,
@@ -233,10 +247,21 @@ export interface NameCache {
   jsonlPath: string | null
 }
 
+/** Build an empty {@link NameCache}. The bun keeps one of these and
+ *  passes it to every {@link resolveMyNameCached} call. */
 export function createNameCache(): NameCache {
   return { value: null, mtimeMs: 0, jsonlPath: null }
 }
 
+/**
+ * Cached {@link resolveMyName} suitable for hot paths.
+ *
+ * @remarks
+ * Returns the cached value when the JSONL mtime is unchanged since the
+ * last call; otherwise re-scans. Hot path: every heartbeat tick + every
+ * tool handler. Before this cache the bun re-scanned multi-MB JSONLs
+ * dozens of times per second under load.
+ */
 export async function resolveMyNameCached(
   ctx: Pick<Context, 'fs' | 'env' | 'proc' | 'clock'>,
   identity: Identity,
@@ -295,6 +320,9 @@ export async function isSelf(
   return false
 }
 
+/** A session dir present under the state root. Returned by
+ *  {@link listKnownInstances} and consumed by every peer-enumeration
+ *  path (presence, broadcast, publish, doctor). */
 export interface KnownInstance {
   id: string
   isUuid: boolean
@@ -302,6 +330,10 @@ export interface KnownInstance {
   lastActive: number
 }
 
+/** Enumerate every peer dir under the state root, resolving display
+ *  name for UUID-shaped entries. Skips dotfiles and non-directories.
+ *  Caller pairs this with {@link isLivePeer} + {@link isSelf} for the
+ *  fan-out target set. */
 export async function listKnownInstances(
   ctx: Pick<Context, 'fs' | 'env' | 'proc'>,
   stateRoot: string,

@@ -1,6 +1,7 @@
 import type { Context } from '../effects.ts'
 import { applyIntent, applyStatus, readAgentState, writeAgentState } from '../heartbeat.ts'
 
+/** Path to the per-session `.agent_state` file. */
 export interface SetStateTargets {
   agentStatePath: string
 }

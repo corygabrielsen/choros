@@ -14,6 +14,7 @@ import {
   removeMember,
 } from '../threads.ts'
 
+/** Paths + identity needed by the thread tool handlers. */
 export interface ThreadTargets {
   stateRoot: string
   me: string
@@ -76,6 +77,7 @@ export async function handleListThreads(
   return listThreadsFor(ctx, { stateRoot: targets.stateRoot }, targets.me)
 }
 
+/** Inputs accepted by `mcp__choros__send_to_thread`. */
 export interface SendToThreadArgs {
   thread_id?: string
   body?: string

@@ -2,8 +2,9 @@ import { join } from 'node:path'
 import { PUSH_TIMEOUT_MS, atomicWrite, withTimeout } from './delivery.ts'
 import type { Context } from './effects.ts'
 import { isLivePeer } from './health.ts'
-import { type KnownInstance, isSelf, listKnownInstances } from './identity.ts'
+import { isSelf, listKnownInstances } from './identity.ts'
 
+/** Paths + identity needed for presence broadcasts. */
 export interface PresenceTargets {
   stateRoot: string
   projectsRoot: string
@@ -11,11 +12,17 @@ export interface PresenceTargets {
   myName: string
 }
 
+/** A peer judged live at the moment of a presence enumeration. */
 export interface LivePeer {
   id: string
   name: string | null
 }
 
+/** Kinds of presence event written into peers' `presence/` dirs.
+ *
+ *  - `hello`: I am coming online.
+ *  - `goodbye`: I am going offline (best-effort; written on clean exit).
+ *  - `rename`: My display name changed; payload includes old + new. */
 export type PresenceKind = 'hello' | 'goodbye' | 'rename'
 
 /** Drop a `.hello` / `.goodbye` / `.rename` file into a peer's `presence/`
@@ -95,6 +102,7 @@ export async function broadcastPresence(
   return peers
 }
 
+/** Inputs to {@link emitBootRoster}. */
 export interface RosterParams {
   wedgePath: string
   peers: LivePeer[]
@@ -206,5 +214,3 @@ export async function emitPresence(
   }
   return result === 'ok' ? 'emitted' : 'timeout'
 }
-
-export type _ReferencedKnownInstance = KnownInstance

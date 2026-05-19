@@ -5,11 +5,13 @@ import { parseMentions } from '../identity.ts'
 import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 import { liveEligiblePeers } from '../presence.ts'
 
+/** Inputs accepted by `mcp__choros__broadcast`. */
 export interface BroadcastArgs {
   body?: string
   act?: string
 }
 
+/** Paths + identity that {@link handleBroadcast} needs. */
 export interface BroadcastTargets {
   stateRoot: string
   projectsRoot: string
@@ -18,6 +20,7 @@ export interface BroadcastTargets {
   mySentDir: string
 }
 
+/** Broadcast-tool response. */
 export interface BroadcastResult {
   msg_id: string
   recipients: string[]

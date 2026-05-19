@@ -5,6 +5,7 @@ import { recipientLastAgentTurnAgeMs, recipientLiveness } from '../health.ts'
 import { isSelf, parseMentions, resolveRecipient } from '../identity.ts'
 import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 
+/** Inputs accepted by `mcp__choros__send`. */
 export interface SendArgs {
   to?: string
   body?: string
@@ -18,6 +19,8 @@ export interface SendArgs {
   msg_id?: string
 }
 
+/** Paths + identity that {@link handleSend} needs. Bound at boot from
+ *  the production {@link Context} or test fixture. */
 export interface SendTargets {
   stateRoot: string
   projectsRoot: string
@@ -26,6 +29,7 @@ export interface SendTargets {
   mySentDir: string
 }
 
+/** Send-tool response. */
 export interface SendResult {
   msg_id: string
   recipient_id: string

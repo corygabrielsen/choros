@@ -2,6 +2,7 @@ import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { sanitizeId } from '../identity.ts'
 
+/** Path to the per-session `.subscriptions` file. */
 export interface SubscribeTargets {
   subscriptionsPath: string
 }
@@ -66,6 +67,8 @@ export async function handleUnsubscribe(
   return { subscribed: [...set].sort() }
 }
 
+/** Test whether a peer is subscribed to a topic. Used by
+ *  {@link handlePublish} to filter the fan-out set. */
 export async function listSubscribers(
   ctx: Pick<Context, 'fs'>,
   stateRoot: string,

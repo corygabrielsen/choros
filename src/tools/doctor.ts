@@ -7,6 +7,7 @@ import {
 } from '../health.ts'
 import { listKnownInstances } from '../identity.ts'
 
+/** Paths + identity that {@link handleDoctor} needs. */
 export interface DoctorTargets {
   stateRoot: string
   projectsRoot: string
@@ -15,6 +16,7 @@ export interface DoctorTargets {
   inboxDir: string
 }
 
+/** One peer's row in a doctor report. */
 export interface DoctorPeer {
   session_id: string
   display_name: string | null
@@ -25,6 +27,7 @@ export interface DoctorPeer {
   bun_alive: boolean
 }
 
+/** Top-level doctor response shape. */
 export interface DoctorReport {
   self: {
     session_id: string

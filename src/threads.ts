@@ -14,12 +14,15 @@ import type { InboxMessage } from './inbox.ts'
  *  was first sent without an `in_reply_to`. Replies (`in_reply_to: <id>`)
  *  walk back to the root.
  */
+/** On-disk shape of `.threads/<root>/meta.json`. Created on first
+ *  ensureThread; never overwritten thereafter. */
 export interface ThreadMeta {
   root_msg_id: string
   created_at: string
   title?: string
 }
 
+/** Paths needed by thread storage operations. */
 export interface ThreadTargets {
   stateRoot: string
 }
@@ -154,6 +157,7 @@ async function writeMembers(
   )
 }
 
+/** Return the sorted list of peer ids currently subscribed to a thread. */
 export async function listMembers(
   ctx: Pick<Context, 'fs'>,
   targets: ThreadTargets,
@@ -163,6 +167,9 @@ export async function listMembers(
   return [...set].sort()
 }
 
+/** Add a peer to a thread's member set. Serialized per-thread via
+ *  {@link serializeOnThread} so concurrent add/remove cannot lose
+ *  updates. Idempotent. */
 export async function addMember(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
   targets: ThreadTargets,
@@ -178,6 +185,7 @@ export async function addMember(
   })
 }
 
+/** Remove a peer from a thread's member set. Idempotent. */
 export async function removeMember(
   ctx: Pick<Context, 'fs' | 'proc'>,
   targets: ThreadTargets,
@@ -192,6 +200,7 @@ export async function removeMember(
   })
 }
 
+/** Compact thread summary returned by {@link listThreadsFor}. */
 export interface ThreadSummary {
   root_msg_id: string
   title?: string
@@ -201,6 +210,8 @@ export interface ThreadSummary {
   last_ts?: string
 }
 
+/** List threads `peerId` is a member of, sorted by last activity
+ *  (most recent first). */
 export async function listThreadsFor(
   ctx: Pick<Context, 'fs'>,
   targets: ThreadTargets,

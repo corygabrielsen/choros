@@ -10,7 +10,13 @@ import {
 import type { Context } from './effects.ts'
 import { findJsonlForSession } from './identity.ts'
 
+/** Maximum UTF-8 body size for any outbound message, enforced at every
+ *  outbound tool boundary. Blob overflow is intentionally not handled —
+ *  callers split or trim large content themselves. */
 export const BODY_CAP_BYTES = 64 * 1024
+
+/** Cadence for the periodic re-emit sweep. inotify fires once per file
+ *  change; the sweep retries inbox files whose initial push timed out. */
 export const SWEEP_INTERVAL_MS = 60_000
 /** Cap on the dropped-ack dedup Set. Older entries fall off so a long-
  *  running bun under sustained wedge doesn't grow memory unboundedly.
@@ -49,8 +55,15 @@ export const SPEECH_ACTS = [
   'ANSWER',
   'OBSERVATION',
 ] as const
+/** Union of valid {@link SPEECH_ACTS} values. */
 export type SpeechAct = (typeof SPEECH_ACTS)[number]
 
+/**
+ * Validate an optional speech-act tag.
+ *
+ * @returns The act when valid, `undefined` when omitted.
+ * @throws When `value` is non-string or not a member of {@link SPEECH_ACTS}.
+ */
 export function validateSpeechAct(value: unknown): SpeechAct | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'string') throw new Error('act must be a string')
@@ -60,6 +73,9 @@ export function validateSpeechAct(value: unknown): SpeechAct | undefined {
   return value as SpeechAct
 }
 
+/** Paths + identity needed to process a single inbox file. Passed to
+ *  every emit/archive operation so the module stays free of module-level
+ *  state. */
 export interface InboxTargets {
   stateRoot: string
   projectsRoot: string
@@ -70,6 +86,11 @@ export interface InboxTargets {
   readDir: string
 }
 
+/**
+ * On-disk + on-wire shape of a choros message. Optional fields are
+ * populated only when meaningful for that message variant (broadcast,
+ * topic publish, thread post, reply).
+ */
 export interface InboxMessage {
   id: string
   ts?: string
@@ -106,6 +127,12 @@ export async function readInboxMessage(
   }
 }
 
+/** Outcome of an {@link emitInboxMessage} call.
+ *
+ *  - `emitted`: pushed AND JSONL-confirmed; `.seen` sidecar + `.ack` written.
+ *  - `skipped`: filename ineligible (wrong extension, already seen, etc).
+ *  - `timeout`: push timed out; file left for next sweep.
+ *  - `dropped`: push resolved but JSONL probe missed; `.dropped` written. */
 export interface EmitResult {
   status: 'emitted' | 'skipped' | 'timeout' | 'dropped'
 }

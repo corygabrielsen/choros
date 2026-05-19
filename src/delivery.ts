@@ -123,6 +123,8 @@ function waitMs(ctx: Pick<Context, 'clock'>, ms: number): Promise<void> {
   })
 }
 
+/** Mutable counter the bun threads through every push so wedge detection
+ *  can observe consecutive failures across calls. */
 export interface WedgeState {
   consecutiveTimeouts: number
 }
@@ -179,6 +181,8 @@ export async function pushChannelNotification(
   return 'timeout'
 }
 
+/** Identity + state-root needed to write an ack file into a sender's
+ *  `sent_acks/` dir. */
 export interface AckTargets {
   stateRoot: string
   me: string

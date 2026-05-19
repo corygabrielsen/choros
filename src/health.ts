@@ -28,6 +28,19 @@ export async function recipientLastAgentTurnAgeMs(
   }
 }
 
+/**
+ * Peer health categories surfaced by `doctor`.
+ *
+ * - `live`: fresh heartbeat, alive bun, no wedge, recent agent turn.
+ * - `paused`: fresh+alive but agent hasn't turned recently (likely
+ *   blocked on `AskUserQuestion` or a long tool).
+ * - `wedged`: fresh+alive but `.wedged` marker present (push channel
+ *   has timed out ≥ {@link WEDGE_TIMEOUT_THRESHOLD} times).
+ * - `stale`: heartbeat older than {@link LIVE_MAX_AGE_MS} but bun alive.
+ * - `dead`: heartbeat older than {@link DEAD_AGE_MS}, OR fresh heartbeat
+ *   but bun pid is gone (the v0.17 ghost-peer case).
+ * - `none`: no heartbeat ever observed.
+ */
 export type Classification = 'live' | 'paused' | 'wedged' | 'stale' | 'dead' | 'none'
 
 /** A peer is "live" only if its heartbeat mtime is fresh AND its bun
@@ -76,6 +89,15 @@ export function classifyPeerHeartbeat(
   return 'live'
 }
 
+/**
+ * Recipient state summary returned in send-tool responses so the sender
+ * agent can reason about delivery expectations.
+ *
+ * @remarks
+ * `unknown` is reserved for "no heartbeat file at all"; a heartbeat-fresh
+ * but pid-dead recipient surfaces as `stale` (was previously `live`
+ * before the v0.17 fix).
+ */
 export interface RecipientHealth {
   status: 'live' | 'stale' | 'wedged' | 'unknown'
   age_ms?: number

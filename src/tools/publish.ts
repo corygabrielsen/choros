@@ -5,12 +5,14 @@ import { isSelf, listKnownInstances, parseMentions } from '../identity.ts'
 import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 import { listSubscribers } from './subscribe.ts'
 
+/** Inputs accepted by `mcp__choros__publish`. */
 export interface PublishArgs {
   topic?: string
   body?: string
   act?: string
 }
 
+/** Paths + identity that {@link handlePublish} needs. */
 export interface PublishTargets {
   stateRoot: string
   projectsRoot: string
@@ -19,6 +21,7 @@ export interface PublishTargets {
   mySentDir: string
 }
 
+/** Publish-tool response. */
 export interface PublishResult {
   msg_id: string
   topic: string

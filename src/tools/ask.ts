@@ -4,14 +4,18 @@ import { isSelf, resolveRecipient } from '../identity.ts'
 import { type InboxMessage, asStringField } from '../inbox.ts'
 import { type SendTargets, handleSend } from './send.ts'
 
+/** Default timeout for {@link handleAsk} when no `timeout_ms` is given. */
 export const DEFAULT_ASK_TIMEOUT_MS = 60_000
 
+/** Inputs accepted by `mcp__choros__ask`. */
 export interface AskArgs {
   to?: string
   body?: string
   timeout_ms?: number
 }
 
+/** Outcome of an {@link handleAsk} call. Either an answer arrived in
+ *  time, or the timeout fired. The promise never throws on these. */
 export type AskResult =
   | { status: 'answered'; reply_msg_id: string; reply_body: string; reply_from: string }
   | { status: 'timeout'; question_msg_id: string }
