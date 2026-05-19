@@ -16,14 +16,17 @@ export interface LivePeer {
   name: string | null
 }
 
-/** Drop a `.hello` / `.goodbye` file into a peer's `presence/` dir.
- *  Uses atomicWrite — a peer's inotify watcher won't see a half-written
+export type PresenceKind = 'hello' | 'goodbye' | 'rename'
+
+/** Drop a `.hello` / `.goodbye` / `.rename` file into a peer's `presence/`
+ *  dir. Uses atomicWrite — a peer's inotify watcher won't see a half-written
  *  payload. */
 export async function writePresence(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
   targets: PresenceTargets,
   peerId: string,
-  kind: 'hello' | 'goodbye',
+  kind: PresenceKind,
+  extra: Record<string, unknown> = {},
 ): Promise<void> {
   if (peerId === targets.me) return
   const peerPresenceDir = join(targets.stateRoot, peerId, 'presence')
@@ -33,15 +36,35 @@ export async function writePresence(
     .replace(/[-:]/g, '')
     .replace(/\.\d+Z$/, 'Z')
   const path = join(peerPresenceDir, `${tsId}-${targets.me.slice(0, 8)}.${kind}`)
+  const eventMap = { hello: 'join', goodbye: 'leave', rename: 'rename' } as const
   const payload = JSON.stringify({
-    event: kind === 'hello' ? 'join' : 'leave',
+    event: eventMap[kind],
     peer_id: targets.me,
     peer_name: targets.myName,
     peer_host: ctx.env.hostname(),
     peer_cwd: ctx.proc.cwd(),
     ts: ctx.clock.nowIso(),
+    ...extra,
   })
   await atomicWrite(ctx, path, payload)
+}
+
+/** Broadcast a rename event to every live peer. Called from the heartbeat
+ *  tick when resolveMyName() returns a value different from the previous
+ *  tick — peers learn of the change immediately rather than at next send. */
+export async function broadcastRename(
+  ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
+  targets: PresenceTargets,
+  oldName: string,
+  newName: string,
+): Promise<LivePeer[]> {
+  const peers = await liveEligiblePeers(ctx, targets)
+  await Promise.all(
+    peers.map(p =>
+      writePresence(ctx, targets, p.id, 'rename', { old_name: oldName, new_name: newName }),
+    ),
+  )
+  return peers
 }
 
 /** Enumerate live peers, applying three-layer self-exclusion + the v0.17
@@ -116,7 +139,13 @@ export async function emitPresence(
   filename: string,
 ): Promise<'emitted' | 'skipped' | 'self' | 'timeout'> {
   if (filename.startsWith('.')) return 'skipped'
-  if (!filename.endsWith('.hello') && !filename.endsWith('.goodbye')) return 'skipped'
+  if (
+    !filename.endsWith('.hello') &&
+    !filename.endsWith('.goodbye') &&
+    !filename.endsWith('.rename')
+  ) {
+    return 'skipped'
+  }
   const path = join(ownPresenceDir, filename)
   let raw: string
   try {
@@ -124,7 +153,13 @@ export async function emitPresence(
   } catch {
     return 'skipped'
   }
-  let data: { peer_id?: string; peer_name?: string; event?: string }
+  let data: {
+    peer_id?: string
+    peer_name?: string
+    event?: string
+    old_name?: string
+    new_name?: string
+  }
   try {
     data = JSON.parse(raw)
   } catch {
@@ -145,10 +180,14 @@ export async function emitPresence(
     peer_id: String(data.peer_id ?? ''),
     peer_name: String(data.peer_name ?? ''),
   }
+  if (data.old_name) meta.old_name = data.old_name
+  if (data.new_name) meta.new_name = data.new_name
   let content: string
   if (data.event === 'join') content = `Peer ${peerLabel} came online`
   else if (data.event === 'leave') content = `Peer ${peerLabel} went offline`
-  else content = `Peer ${peerLabel} presence event: ${data.event}`
+  else if (data.event === 'rename') {
+    content = `Peer ${data.old_name ?? '?'} renamed to ${data.new_name ?? '?'}`
+  } else content = `Peer ${peerLabel} presence event: ${data.event}`
   const result = await withTimeout(
     ctx,
     ctx.mcp.notify('notifications/claude/channel', { content, meta }),

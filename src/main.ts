@@ -8,7 +8,7 @@ import { type Context, type Mcp, realContext } from './effects.ts'
 import { HEARTBEAT_INTERVAL_MS, buildHeartbeat, writeHeartbeat } from './heartbeat.ts'
 import { resolveIdentity, resolveMyName } from './identity.ts'
 import { emitInboxMessage } from './inbox.ts'
-import { broadcastPresence, emitBootRoster, emitPresence } from './presence.ts'
+import { broadcastPresence, broadcastRename, emitBootRoster, emitPresence } from './presence.ts'
 import { projectsRoot, resolveStateRoot } from './state-root.ts'
 import { handleBroadcast } from './tools/broadcast.ts'
 import { handleDoctor } from './tools/doctor.ts'
@@ -18,7 +18,7 @@ import { handleSend } from './tools/send.ts'
 import { handleSetIntent, handleSetStatus } from './tools/set_state.ts'
 import { handleSubscribe, handleUnsubscribe } from './tools/subscribe.ts'
 
-const server = new Server({ name: 'choros', version: '0.18.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.19.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -164,6 +164,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
 })
 
 async function tickHeartbeat(): Promise<void> {
+  const previousName = myName
   myName = await resolveMyName(ctx, identity, PROJECTS_ROOT)
   const hb = buildHeartbeat(ctx, {})
   try {
@@ -171,6 +172,18 @@ async function tickHeartbeat(): Promise<void> {
   } catch (e: unknown) {
     const m = e instanceof Error ? e.message : String(e)
     ctx.proc.stderr(`[choros] heartbeat write failed: ${m}\n`)
+  }
+  if (previousName !== myName) {
+    const targets = { stateRoot: STATE_ROOT, projectsRoot: PROJECTS_ROOT, me: ME, myName }
+    try {
+      const peers = await broadcastRename(ctx, targets, previousName, myName)
+      ctx.proc.stderr(
+        `[choros] rename ${previousName} → ${myName}; broadcast to ${peers.length} peer(s)\n`,
+      )
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e)
+      ctx.proc.stderr(`[choros] rename broadcast failed: ${m}\n`)
+    }
   }
 }
 
@@ -251,7 +264,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.18 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.19 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )

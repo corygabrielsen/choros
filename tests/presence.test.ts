@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   broadcastPresence,
+  broadcastRename,
   emitBootRoster,
   emitPresence,
   liveEligiblePeers,
@@ -204,5 +205,62 @@ describe('emitPresence (own presence dir consumer)', () => {
     const dir = `${STATE}/${ME}/presence`
     expect(await emitPresence(ctx, dir, ME, '.in-progress.tmp')).toBe('skipped')
     expect(await emitPresence(ctx, dir, ME, 'random.txt')).toBe('skipped')
+  })
+
+  test('emits rename event with old_name / new_name in meta', async () => {
+    const ctx = fakeContext()
+    const dir = `${STATE}/${ME}/presence`
+    const filename = '20260519T010000Z-22222222.rename'
+    await ctx.fs.writeFile(
+      `${dir}/${filename}`,
+      JSON.stringify({
+        event: 'rename',
+        peer_id: '22222222',
+        peer_name: 'new-name',
+        old_name: 'old-name',
+        new_name: 'new-name',
+      }),
+    )
+    const r = await emitPresence(ctx, dir, ME, filename)
+    expect(r).toBe('emitted')
+    const params = ctx.mcp.notifications[0]?.params as {
+      content: string
+      meta: Record<string, string>
+    }
+    expect(params.content).toBe('Peer old-name renamed to new-name')
+    expect(params.meta.event).toBe('rename')
+    expect(params.meta.old_name).toBe('old-name')
+    expect(params.meta.new_name).toBe('new-name')
+  })
+})
+
+describe('broadcastRename', () => {
+  test('writes a .rename to every live peer with old+new fields', async () => {
+    const ctx = fakeContext()
+    const p1 = '22222222-2222-2222-2222-222222222222'
+    const p2 = '33333333-3333-3333-3333-333333333333'
+    await seedLivePeer(ctx, p1, 9001)
+    await seedLivePeer(ctx, p2, 9002)
+    const peers = await broadcastRename(ctx, targets, 'old-name', 'new-name')
+    expect(peers.map(p => p.id).sort()).toEqual([p1, p2].sort())
+    for (const p of peers) {
+      const dir = `${STATE}/${p.id}/presence`
+      const entries = await ctx.fs.readdir(dir)
+      const renameFile = entries.find(e => e.endsWith('.rename'))
+      expect(renameFile).toBeDefined()
+      if (!renameFile) continue
+      const payload = JSON.parse(await ctx.fs.readFile(`${dir}/${renameFile}`))
+      expect(payload.event).toBe('rename')
+      expect(payload.old_name).toBe('old-name')
+      expect(payload.new_name).toBe('new-name')
+    }
+  })
+
+  test('skips dead-bun peers (v0.17 invariant carries through)', async () => {
+    const ctx = fakeContext()
+    const dead = '44444444-4444-4444-4444-444444444444'
+    await seedDeadPeer(ctx, dead, 9999)
+    const peers = await broadcastRename(ctx, targets, 'a', 'b')
+    expect(peers).toEqual([])
   })
 })
