@@ -1,0 +1,88 @@
+import { join } from 'node:path'
+import type { Context } from '../effects.ts'
+import {
+  type Classification,
+  classifyPeerHeartbeat,
+  recipientLastAgentTurnAgeMs,
+} from '../health.ts'
+import { listKnownInstances } from '../identity.ts'
+
+export interface DoctorTargets {
+  stateRoot: string
+  projectsRoot: string
+  me: string
+  myName: string
+  inboxDir: string
+}
+
+export interface DoctorPeer {
+  session_id: string
+  display_name: string | null
+  classification: Classification
+  heartbeat_age_ms?: number
+  last_agent_turn_age_ms?: number
+  wedged: boolean
+  bun_alive: boolean
+}
+
+export interface DoctorReport {
+  self: {
+    session_id: string
+    display_name: string
+    inbox_unread: number
+  }
+  peers: DoctorPeer[]
+}
+
+async function countUnreadInbox(ctx: Pick<Context, 'fs'>, inboxDir: string): Promise<number> {
+  try {
+    const entries = await ctx.fs.readdir(inboxDir)
+    return entries.filter(e => e.endsWith('.json') && !e.endsWith('.seen')).length
+  } catch {
+    return 0
+  }
+}
+
+export async function handleDoctor(
+  ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
+  targets: DoctorTargets,
+): Promise<DoctorReport> {
+  const known = await listKnownInstances(ctx, targets.stateRoot, targets.projectsRoot)
+  const peers: DoctorPeer[] = []
+  for (const k of known) {
+    if (k.id === targets.me) continue
+    const dir = join(targets.stateRoot, k.id)
+    let heartbeatAgeMs: number | undefined
+    let peerPid: number | undefined
+    try {
+      const s = await ctx.fs.stat(join(dir, '.heartbeat'))
+      heartbeatAgeMs = ctx.clock.nowMs() - s.mtimeMs
+      const raw = await ctx.fs.readFile(join(dir, '.heartbeat'))
+      const hb = JSON.parse(raw) as { pid?: number }
+      if (typeof hb?.pid === 'number') peerPid = hb.pid
+    } catch {
+      /* no heartbeat or unparseable */
+    }
+    const bunAlive = peerPid !== undefined && (await ctx.proc.pidAlive(peerPid))
+    const wedged = ctx.fs.existsSync(join(dir, '.wedged'))
+    const lastAgent = await recipientLastAgentTurnAgeMs(ctx, k.id, targets.projectsRoot)
+    const classification = classifyPeerHeartbeat(heartbeatAgeMs, wedged, lastAgent, bunAlive)
+    peers.push({
+      session_id: k.id,
+      display_name: k.name,
+      classification,
+      heartbeat_age_ms: heartbeatAgeMs,
+      last_agent_turn_age_ms: lastAgent,
+      wedged,
+      bun_alive: bunAlive,
+    })
+  }
+  return {
+    self: {
+      session_id: targets.me,
+      display_name: targets.myName,
+      inbox_unread: await countUnreadInbox(ctx, targets.inboxDir),
+    },
+    peers,
+  }
+}

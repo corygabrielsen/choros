@@ -1,8 +1,28 @@
 import { join } from 'node:path'
 import type { Context } from './effects.ts'
+import { findJsonlForSession } from './identity.ts'
 
 export const LIVE_MAX_AGE_MS = 90_000
 export const DEAD_AGE_MS = 600_000
+
+/** Age of the recipient's CC JSONL last modification. Stale value =
+ *  the agent hasn't taken a tool-loop turn recently. Distinct from
+ *  heartbeat age: bun-alive + agent-paused has fresh heartbeat AND
+ *  stale agent-turn. */
+export async function recipientLastAgentTurnAgeMs(
+  ctx: Pick<Context, 'fs' | 'clock' | 'env' | 'proc'>,
+  recipientId: string,
+  projectsRoot: string,
+): Promise<number | undefined> {
+  const jsonl = await findJsonlForSession(ctx, projectsRoot, recipientId)
+  if (!jsonl) return undefined
+  try {
+    const s = await ctx.fs.stat(jsonl)
+    return ctx.clock.nowMs() - s.mtimeMs
+  } catch {
+    return undefined
+  }
+}
 
 export type Classification = 'live' | 'paused' | 'wedged' | 'stale' | 'dead' | 'none'
 
