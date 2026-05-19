@@ -32,6 +32,7 @@ import {
   handleListThreads,
   handleSendToThread,
 } from './tools/threads.ts'
+import { setupWatcher, type WatcherHandle } from './watcher.ts'
 
 const server = new Server({ name: 'choros', version: '0.28.0' }, { capabilities: { tools: {} } })
 
@@ -365,191 +366,77 @@ const helloPeers = await broadcastPresence(
 )
 await emitBootRoster(ctx, { wedgePath: WEDGE_PATH, peers: helloPeers })
 
-const inboxWatcher = ctx.spawner.spawn('inotifywait', [
-  '-m',
-  '-q',
-  '-e',
-  'close_write,moved_to',
-  '--format',
-  '%f',
-  MY_INBOX,
-])
-inboxWatcher.onStdout(chunk => {
-  for (const filename of chunk.split('\n').filter(Boolean)) {
-    void emitInboxMessage(
-      ctx,
-      {
-        stateRoot: STATE_ROOT,
-        projectsRoot: PROJECTS_ROOT,
-        me: ME,
-        myName,
-        wedgePath: WEDGE_PATH,
-        inboxDir: MY_INBOX,
-        readDir: MY_READ,
-      },
-      wedge,
-      droppedAcksEmitted,
-      inFlightEmits,
-      filename,
-      askRegistry,
-    )
-  }
-})
+// All three watchers (inbox / presence / sent_acks) share the same
+// lifecycle: spawn inotifywait, post-spawn prescan, periodic sweep,
+// bounded-concurrency prescan dispatch, capped respawn on death, and
+// graceful fallback to sweep-only when inotifywait is unavailable.
+const shuttingDownFlag = { value: false }
+const SWEEP_INTERVAL_MS_VALUE = 60_000
+const PRESCAN_CONCURRENCY = 16
+const WATCHER_RESPAWN_CAP = 5
 
-// Boot pre-scan of presence/. Peers may have written .hello/.goodbye/
-// .rename files while this bun was offline; without the prescan, those
-// events would sit on disk until something modified the dir (which may
-// never happen). Each entry is dispatched through the same emitPresence
-// path the inotify watcher uses — emitPresence is idempotent and
-// unlinks after emit.
-try {
-  const existingPresence = await ctx.fs.readdir(MY_PRESENCE)
-  for (const f of existingPresence.sort()) {
-    if (f.startsWith('.')) continue
-    void emitPresence(ctx, MY_PRESENCE, ME, f)
-  }
-} catch {
-  /* dir doesn't exist yet — created above */
-}
-const presenceWatcher = ctx.spawner.spawn('inotifywait', [
-  '-m',
-  '-q',
-  '-e',
-  'close_write,moved_to',
-  '--format',
-  '%f',
-  MY_PRESENCE,
-])
-presenceWatcher.onStdout(chunk => {
-  for (const filename of chunk.split('\n').filter(Boolean)) {
-    void emitPresence(ctx, MY_PRESENCE, ME, filename)
-  }
-})
-
-// Pre-scan + watch sent_acks/ for incoming .ack / .dropped / .react / .read
-// files. Recipient bun JSONL-confirms our outbound msg and writes here;
-// without this watcher, choros-ack / choros-read / choros-reaction events
-// are documented in SKILL.md but never fire.
-try {
-  const existingAcks = await ctx.fs.readdir(MY_ACKS)
-  for (const f of existingAcks.sort()) {
-    if (f.startsWith('.')) continue
-    void emitAck(ctx, MY_ACKS, f)
-  }
-} catch {
-  /* dir doesn't exist yet — created above */
-}
-// inotifywait can die under load (watch-table exhaustion, fs unmount).
-// The ack watcher is non-critical (inbox + presence are the load-bearing
-// ones) but if it stays dead silently, choros-ack/read/reaction events
-// stop firing and the agent doesn't learn delivery state. Respawn on
-// non-shutdown exit, bounded to a few attempts to avoid an infinite
-// respawn loop against a permanent fs error.
-let ackWatcherRespawns = 0
-const ACK_WATCHER_RESPAWN_CAP = 5
-function spawnAckWatcher(): ReturnType<typeof ctx.spawner.spawn> {
-  const w = ctx.spawner.spawn('inotifywait', [
-    '-m',
-    '-q',
-    '-e',
-    'close_write,moved_to',
-    '--format',
-    '%f',
-    MY_ACKS,
-  ])
-  w.onStdout(chunk => {
-    for (const filename of chunk.split('\n').filter(Boolean)) {
-      void emitAck(ctx, MY_ACKS, filename)
-    }
-  })
-  w.onExit(code => {
-    if (shuttingDown) return
-    ackWatcherRespawns++
-    if (ackWatcherRespawns > ACK_WATCHER_RESPAWN_CAP) {
-      ctx.proc.stderr(
-        `[choros] ack watcher died (code=${code}); ${ACK_WATCHER_RESPAWN_CAP}+ respawn attempts exhausted, giving up\n`,
-      )
-      return
-    }
-    ctx.proc.stderr(
-      `[choros] ack watcher exited (code=${code}); respawning (attempt ${ackWatcherRespawns})\n`,
-    )
-    const fresh = spawnAckWatcher()
-    const idx = watchers.indexOf(w)
-    if (idx >= 0) watchers[idx] = fresh
-  })
-  return w
-}
-const ackWatcher = spawnAckWatcher()
-
-// Periodic re-emit sweep. Inbox files that timed out (push_timeout or
-// JSONL-probe miss) still need redelivery; the inotify watcher fires
-// once on each filesystem change, so without periodic re-scan a wedged
-// CC during the initial push silently loses the message.
-let sweepInFlight = false
-const SWEEP_INTERVAL_MS_LOCAL = 60_000
-async function reemitSweep(): Promise<void> {
-  if (sweepInFlight) return
-  sweepInFlight = true
-  try {
-    let entries: string[] = []
-    try {
-      entries = await ctx.fs.readdir(MY_INBOX)
-    } catch {
-      return
-    }
-    const candidates = entries.filter(
-      f => f.endsWith('.json') && !f.startsWith('.') && !f.endsWith('.seen'),
-    )
-    const targets = candidates.filter(f => !ctx.fs.existsSync(`${MY_INBOX}/${f}.seen`))
-    if (targets.length === 0) return
-    ctx.proc.stderr(`[choros] sweep: retrying ${targets.length} un-pushed file(s)\n`)
-    for (const f of targets) {
-      try {
-        await emitInboxMessage(
-          ctx,
-          {
-            stateRoot: STATE_ROOT,
-            projectsRoot: PROJECTS_ROOT,
-            me: ME,
-            myName,
-            wedgePath: WEDGE_PATH,
-            inboxDir: MY_INBOX,
-            readDir: MY_READ,
-          },
-          wedge,
-          droppedAcksEmitted,
-          inFlightEmits,
-          f,
-          askRegistry,
-        )
-      } catch (e: unknown) {
-        const m = e instanceof Error ? e.message : String(e)
-        ctx.proc.stderr(`[choros] sweep emit error for ${f}: ${m}\n`)
-      }
-    }
-  } finally {
-    sweepInFlight = false
-  }
-}
-const sweepInterval = setInterval(() => {
-  void reemitSweep()
-}, SWEEP_INTERVAL_MS_LOCAL)
-sweepInterval.unref?.()
-
-const watchers = [inboxWatcher, presenceWatcher, ackWatcher]
-let shuttingDown = false
+const watcherHandles: WatcherHandle[] = []
+watcherHandles.push(
+  setupWatcher(ctx, {
+    dir: MY_INBOX,
+    label: 'inbox',
+    sweepIntervalMs: SWEEP_INTERVAL_MS_VALUE,
+    maxConcurrent: PRESCAN_CONCURRENCY,
+    respawnCap: WATCHER_RESPAWN_CAP,
+    shuttingDown: shuttingDownFlag,
+    emit: filename =>
+      emitInboxMessage(
+        ctx,
+        {
+          stateRoot: STATE_ROOT,
+          projectsRoot: PROJECTS_ROOT,
+          me: ME,
+          myName,
+          wedgePath: WEDGE_PATH,
+          inboxDir: MY_INBOX,
+          readDir: MY_READ,
+        },
+        wedge,
+        droppedAcksEmitted,
+        inFlightEmits,
+        filename,
+        askRegistry,
+      ),
+  }),
+)
+watcherHandles.push(
+  setupWatcher(ctx, {
+    dir: MY_PRESENCE,
+    label: 'presence',
+    sweepIntervalMs: SWEEP_INTERVAL_MS_VALUE,
+    maxConcurrent: PRESCAN_CONCURRENCY,
+    respawnCap: WATCHER_RESPAWN_CAP,
+    shuttingDown: shuttingDownFlag,
+    emit: filename => emitPresence(ctx, MY_PRESENCE, ME, filename),
+  }),
+)
+watcherHandles.push(
+  setupWatcher(ctx, {
+    dir: MY_ACKS,
+    label: 'sent_acks',
+    sweepIntervalMs: SWEEP_INTERVAL_MS_VALUE,
+    maxConcurrent: PRESCAN_CONCURRENCY,
+    respawnCap: WATCHER_RESPAWN_CAP,
+    shuttingDown: shuttingDownFlag,
+    emit: filename => emitAck(ctx, MY_ACKS, filename),
+  }),
+)
 
 // Synchronous part of shutdown — safe to call from process 'exit' handler
-// where async work cannot complete. Stops the heartbeat tick, kills
-// inotify children, and releases the identity lock so a fresh bun for
-// this session can start without manual cleanup.
+// where async work cannot complete. Stops the heartbeat tick, stops every
+// watcher (kills its inotify child and clears its sweep interval), and
+// releases the identity lock so a fresh bun for this session can start
+// without manual cleanup.
 function shutdownSync(): void {
-  if (shuttingDown) return
-  shuttingDown = true
+  if (shuttingDownFlag.value) return
+  shuttingDownFlag.value = true
   clearInterval(heartbeatInterval)
-  clearInterval(sweepInterval)
-  for (const w of watchers) w.kill()
+  for (const h of watcherHandles) h.stop()
   try {
     ctx.fs.unlinkSync(LOCK_PATH)
   } catch {
