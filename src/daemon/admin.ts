@@ -1,3 +1,4 @@
+import { chmodSync } from 'node:fs'
 import type { SessionRouter } from '#choros/daemon/sessions.ts'
 import type { Storage } from '#choros/daemon/storage.ts'
 
@@ -13,8 +14,13 @@ export interface AdminServer {
  *      curl --unix-socket choros.admin.sock http://localhost/peers
  *      curl --unix-socket choros.admin.sock http://localhost/stats
  *
- *  Read-only by design — admin writes go through the JSON-RPC server
- *  so they share the same handler surface as production traffic. */
+ *  The socket is chmod'd to 0600 immediately after bind so only the
+ *  invoking user can connect — even if `/peers` would otherwise leak
+ *  agent_status / agent_intent (user-set strings that may contain
+ *  context the operator didn't intend to share with other local
+ *  processes). Read-only by design — admin writes go through the
+ *  JSON-RPC server so they share the same handler surface as
+ *  production traffic. */
 export function startAdminServer(opts: {
   socketPath: string
   storage: Storage
@@ -23,15 +29,22 @@ export function startAdminServer(opts: {
   const server = Bun.serve({
     unix: opts.socketPath,
     fetch(req): Response {
+      // Reject non-GET methods so future writeable endpoints have to
+      // be opted into explicitly.
+      if (req.method !== 'GET') {
+        return new Response('method not allowed', { status: 405 })
+      }
       const url = new URL(req.url)
       switch (url.pathname) {
         case '/peers': {
+          // Default payload: classification-relevant fields only.
+          // Pass `?verbose=1` to include ambient state (agent_status /
+          // agent_intent) which may contain context-sensitive strings.
+          const verbose = url.searchParams.get('verbose') === '1'
+          const baseFields = 'id, display_name, host, lock_pid, heartbeat_at, wedged_at'
+          const cols = verbose ? `${baseFields}, agent_status, agent_intent` : baseFields
           const rows = opts.storage.db
-            .query(
-              `SELECT id, display_name, host, cwd, lock_pid, heartbeat_at, wedged_at,
-                      agent_status, agent_intent
-               FROM sessions ORDER BY heartbeat_at DESC NULLS LAST`,
-            )
+            .query(`SELECT ${cols} FROM sessions ORDER BY heartbeat_at DESC NULLS LAST`)
             .all() as unknown[]
           return Response.json({ peers: rows })
         }
@@ -48,13 +61,33 @@ export function startAdminServer(opts: {
             connected: opts.router.connectedSessionIds().length,
           })
         }
-        case '/health':
-          return Response.json({ ok: true })
+        case '/health': {
+          // Probe the DB so /health actually distinguishes "process
+          // alive" from "process alive but DB unusable."
+          try {
+            opts.storage.db.query('SELECT 1').get()
+            return Response.json({ ok: true })
+          } catch (e: unknown) {
+            const m = e instanceof Error ? e.message : String(e)
+            return Response.json({ ok: false, error: m }, { status: 503 })
+          }
+        }
         default:
           return new Response('not found', { status: 404 })
       }
     },
   })
+
+  // Restrict the admin socket to user-only after Bun creates it. The
+  // default mode is 0755 which would let any local process on the box
+  // read `agent_status` / `agent_intent` — fields the user may set
+  // assuming session-internal scope.
+  try {
+    chmodSync(opts.socketPath, 0o600)
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    process.stderr.write(`[choros-daemon] admin socket chmod failed: ${m}\n`)
+  }
 
   return {
     socketPath: opts.socketPath,

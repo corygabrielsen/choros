@@ -11,29 +11,52 @@ export function asObject(args: unknown, label: string): Record<string, unknown> 
   return args as Record<string, unknown>
 }
 
-/** Require a non-empty string field. */
+/** Default maximum byte length for string fields. Tight enough that
+ *  no single field can pump multi-MB into the channel meta or grow a
+ *  row past reasonable bounds; loose enough that legitimate input
+ *  (agent_status, agent_intent, host, cwd) fits. Per-handler overrides
+ *  pick tighter caps where appropriate (display_name, emoji, topic). */
+export const DEFAULT_STRING_MAX = 8 * 1024
+
+/** Require a non-empty string field. Enforces a byte-length cap via
+ *  `maxBytes` (default {@link DEFAULT_STRING_MAX}) so a malicious or
+ *  buggy shim cannot ship multi-MB strings into row columns. */
 export function requireString(
   obj: Record<string, unknown>,
   field: string,
   label: string,
+  maxBytes: number = DEFAULT_STRING_MAX,
 ): string | RpcError {
   const v = obj[field]
   if (typeof v !== 'string' || v.length === 0) {
     return { code: ERR_INVALID_PARAMS, message: `${label}: "${field}" is required` }
   }
+  if (Buffer.byteLength(v, 'utf8') > maxBytes) {
+    return {
+      code: ERR_INVALID_PARAMS,
+      message: `${label}: "${field}" exceeds ${maxBytes} bytes`,
+    }
+  }
   return v
 }
 
-/** Optional string field. */
+/** Optional string field. Same length cap rules as `requireString`. */
 export function optionalString(
   obj: Record<string, unknown>,
   field: string,
   label: string,
+  maxBytes: number = DEFAULT_STRING_MAX,
 ): string | undefined | RpcError {
   const v = obj[field]
   if (v === undefined || v === null) return undefined
   if (typeof v !== 'string') {
     return { code: ERR_INVALID_PARAMS, message: `${label}: "${field}" must be a string` }
+  }
+  if (Buffer.byteLength(v, 'utf8') > maxBytes) {
+    return {
+      code: ERR_INVALID_PARAMS,
+      message: `${label}: "${field}" exceeds ${maxBytes} bytes`,
+    }
   }
   return v
 }

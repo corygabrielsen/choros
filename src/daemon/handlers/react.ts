@@ -16,7 +16,9 @@ export function handleReact(ctx: HandlerCtx, rawArgs: unknown): ReactResult | Rp
   if (isRpcError(session_id)) return session_id
   const msg_id = requireString(obj, 'msg_id', 'react')
   if (isRpcError(msg_id)) return msg_id
-  const emoji = requireString(obj, 'emoji', 'react')
+  // 64-byte cap covers any reasonable emoji including ZWJ sequences
+  // (👨‍👩‍👧‍👦 fits in ~25 bytes) while preventing an emoji "blob" attack.
+  const emoji = requireString(obj, 'emoji', 'react', 64)
   if (isRpcError(emoji)) return emoji
   try {
     sanitizeId(msg_id, 'react.msg_id')

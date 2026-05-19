@@ -6,6 +6,10 @@ export interface SubscribeResult {
   subscribed: string[]
 }
 
+/** Topic cap — short enough to fit in channel meta without bloat, long
+ *  enough for any reasonable namespacing (`team/foo/bar`). */
+const TOPIC_MAX_BYTES = 256
+
 function parseArgs(
   rawArgs: unknown,
   label: string,
@@ -14,7 +18,7 @@ function parseArgs(
   if (isRpcError(obj)) return obj
   const session_id = requireString(obj, 'session_id', label)
   if (isRpcError(session_id)) return session_id
-  const topic = requireString(obj, 'topic', label)
+  const topic = requireString(obj, 'topic', label, TOPIC_MAX_BYTES)
   if (isRpcError(topic)) return topic
   const t = topic.trim()
   if (t.length === 0) {

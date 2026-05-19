@@ -29,11 +29,19 @@ export interface Storage {
 /** Open or create a choros daemon database at `path`. WAL is enabled
  *  so a reader is never blocked by an in-progress writer (matters
  *  because the admin HTTP endpoint reads concurrently with the RPC
- *  handlers' writes). Foreign keys are enforced. */
+ *  handlers' writes). Auto-checkpoint at 1000 frames keeps the WAL
+ *  bounded under sustained writes. */
 export function openStorage(path: string): Storage {
   const db = new Database(path, { create: true })
   db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA foreign_keys = ON')
+  db.exec('PRAGMA synchronous = NORMAL')
+  db.exec('PRAGMA wal_autocheckpoint = 1000')
+  // Foreign keys are NOT enforced: `messages.from_session` and
+  // `messages.to_session` intentionally accept session ids that may
+  // not yet exist in `sessions` (peers come and go). Declared
+  // constraints would reject those writes. The previous
+  // `PRAGMA foreign_keys = ON` was misleading because no FK
+  // relationships were declared in 000-init.sql.
   applyMigrations(db)
   return {
     db,
@@ -186,20 +194,23 @@ export function enqueuePendingNotification(
     .run(args.session_id, args.session_id, PENDING_PER_SESSION_CAP)
 }
 
-/** Drain (read + delete) every pending notification for a session.
- *  Called by the register handler so the shim receives buffered
- *  events as part of its handshake response. */
+/** Drain (read + delete) every pending notification for a session in
+ *  a single atomic statement. Called by the register handler so the
+ *  shim receives buffered events as part of its handshake response.
+ *  `DELETE ... RETURNING` ensures the SELECT and DELETE can't observe
+ *  a row inserted between them (the previous two-statement version
+ *  was safe under bun:sqlite's synchronous semantics but fragile to
+ *  any future async refactor). */
 export function drainPendingNotifications(
   storage: Storage,
   sessionId: string,
 ): { method: string; params: unknown }[] {
   const rows = storage.db
     .query(
-      `SELECT id, method, params_json FROM pending_notifications
-       WHERE session_id = ? ORDER BY id ASC`,
+      `DELETE FROM pending_notifications
+       WHERE session_id = ?
+       RETURNING method, params_json`,
     )
-    .all(sessionId) as { id: number; method: string; params_json: string }[]
-  if (rows.length === 0) return []
-  storage.db.query('DELETE FROM pending_notifications WHERE session_id = ?').run(sessionId)
+    .all(sessionId) as { method: string; params_json: string }[]
   return rows.map(r => ({ method: r.method, params: JSON.parse(r.params_json) }))
 }

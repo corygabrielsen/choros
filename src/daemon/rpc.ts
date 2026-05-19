@@ -1,3 +1,4 @@
+import { chmodSync } from 'node:fs'
 import { handleBroadcast } from '#choros/daemon/handlers/broadcast.ts'
 import { handleDeregister } from '#choros/daemon/handlers/deregister.ts'
 import { handleDoctor } from '#choros/daemon/handlers/doctor.ts'
@@ -47,7 +48,8 @@ export const MAX_FRAME_BYTES = 4 * 1024 * 1024
  *  speaks NDJSON — one message per line, capped at {@link
  *  MAX_FRAME_BYTES}. The server dispatches to the registered
  *  handlers; unknown methods return a JSON-RPC method-not-found
- *  error. */
+ *  error. The socket is chmod'd to 0600 after bind so only the
+ *  invoking user can connect — choros is a per-user service. */
 export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): RpcServer {
   // Per-connection line buffer. Bun's socket `data` callback may
   // deliver partial NDJSON; we accumulate until a `\n` arrives.
@@ -122,6 +124,13 @@ export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): R
       },
     },
   })
+
+  try {
+    chmodSync(opts.socketPath, 0o600)
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    process.stderr.write(`[choros-daemon] rpc socket chmod failed: ${m}\n`)
+  }
 
   return {
     socketPath: opts.socketPath,
