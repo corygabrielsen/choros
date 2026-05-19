@@ -1,5 +1,11 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
-import { asObject, isRpcError, optionalString, requireString } from '#choros/daemon/helpers.ts'
+import {
+  asObject,
+  cachedSenderName,
+  isRpcError,
+  optionalString,
+  requireString,
+} from '#choros/daemon/helpers.ts'
 import { deliverOrBuffer } from '#choros/daemon/notify.ts'
 import { generateMessageId } from '#choros/identity.ts'
 import { enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
@@ -111,15 +117,29 @@ export function handleListThreads(ctx: HandlerCtx, rawArgs: unknown): ListThread
   const session_id = requireString(obj, 'session_id', 'list_threads')
   if (isRpcError(session_id)) return session_id
 
+  // One scan per derived value via grouped LEFT JOINs, replacing the
+  // two correlated subqueries (which run O(threads) extra queries
+  // per call).
   const threads = ctx.storage.db
     .query(
-      `SELECT t.root_msg_id AS thread_id, t.title,
-              (SELECT COUNT(*) FROM thread_members WHERE thread_id = t.root_msg_id) AS member_count,
-              (SELECT MAX(ts) FROM messages WHERE thread_id = t.root_msg_id) AS last_ts
+      `SELECT t.root_msg_id AS thread_id,
+              t.title,
+              COALESCE(mc.member_count, 0) AS member_count,
+              ml.last_ts
        FROM threads t
-       JOIN thread_members tm ON tm.thread_id = t.root_msg_id
-       WHERE tm.session_id = ?
-       ORDER BY last_ts DESC NULLS LAST`,
+       JOIN thread_members me ON me.thread_id = t.root_msg_id AND me.session_id = ?
+       LEFT JOIN (
+         SELECT thread_id, COUNT(*) AS member_count
+         FROM thread_members
+         GROUP BY thread_id
+       ) mc ON mc.thread_id = t.root_msg_id
+       LEFT JOIN (
+         SELECT thread_id, MAX(ts) AS last_ts
+         FROM messages
+         WHERE thread_id IS NOT NULL
+         GROUP BY thread_id
+       ) ml ON ml.thread_id = t.root_msg_id
+       ORDER BY ml.last_ts DESC NULLS LAST`,
     )
     .all(session_id) as ListThreadsResult['threads']
   return { threads }
@@ -175,12 +195,7 @@ export function handleSendToThread(
   ).map(r => r.session_id)
 
   const msgId = generateMessageId(session_id, ctx.nowIso())
-  const senderName =
-    (
-      ctx.storage.db.query('SELECT display_name FROM sessions WHERE id = ?').get(session_id) as {
-        display_name: string | null
-      } | null
-    )?.display_name ?? null
+  const senderName = cachedSenderName(ctx, session_id)
 
   const ts = ctx.nowIso()
   const replyTrim = replyTo?.trim() || null

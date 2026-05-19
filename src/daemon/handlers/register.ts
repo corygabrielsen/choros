@@ -74,7 +74,7 @@ export function handleRegister(
     pid: parsed.pid,
     nowIso: ctx.nowIso(),
   })
-  ctx.router.bind(parsed.session_id, sink)
+  ctx.router.bind(parsed.session_id, sink, parsed.display_name)
   const pending = drainPendingNotifications(ctx.storage, parsed.session_id)
   return {
     daemon_version: ctx.daemon.version,

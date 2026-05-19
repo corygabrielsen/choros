@@ -43,10 +43,19 @@ export function startAdminServer(opts: {
           const verbose = url.searchParams.get('verbose') === '1'
           const baseFields = 'id, display_name, host, lock_pid, heartbeat_at, wedged_at'
           const cols = verbose ? `${baseFields}, agent_status, agent_intent` : baseFields
+          // Cap rows so a swarm with thousands of historical sessions
+          // doesn't dump the whole table on every poll; cockpit refreshes
+          // /peers on every render. Override via `?limit=N` (1..1000).
+          const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '', 10)
+          const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : 200
+          const rawOffset = Number.parseInt(url.searchParams.get('offset') ?? '', 10)
+          const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0
           const rows = opts.storage.db
-            .query(`SELECT ${cols} FROM sessions ORDER BY heartbeat_at DESC NULLS LAST`)
-            .all() as unknown[]
-          return Response.json({ peers: rows })
+            .query(
+              `SELECT ${cols} FROM sessions ORDER BY heartbeat_at DESC NULLS LAST LIMIT ? OFFSET ?`,
+            )
+            .all(limit, offset) as unknown[]
+          return Response.json({ peers: rows, limit, offset })
         }
         case '/stats': {
           const sessions = opts.storage.db.query('SELECT COUNT(*) AS n FROM sessions').get() as {

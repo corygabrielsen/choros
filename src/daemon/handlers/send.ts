@@ -2,6 +2,7 @@ import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import {
   asObject,
+  cachedSenderName,
   isRpcError,
   nowMsFromCtx,
   optionalString,
@@ -117,14 +118,7 @@ export function handleSend(ctx: HandlerCtx, rawArgs: unknown): SendResult | RpcE
       ctx.nowIso(),
     )
 
-  const senderName =
-    (
-      ctx.storage.db
-        .query('SELECT display_name FROM sessions WHERE id = ?')
-        .get(parsed.session_id) as {
-        display_name: string | null
-      } | null
-    )?.display_name ?? null
+  const senderName = cachedSenderName(ctx, parsed.session_id)
 
   deliverOrBuffer(ctx, recipient.id, NOTIFY_INBOUND_MESSAGE, {
     msg_id: msgId,

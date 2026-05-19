@@ -173,7 +173,9 @@ export const PENDING_PER_SESSION_CAP = 1024
 
 /** Buffer one notification for a session whose shim is currently
  *  offline. Trims the queue to {@link PENDING_PER_SESSION_CAP} oldest
- *  rows per session_id so a long-offline peer can't grow unbounded. */
+ *  rows per session_id so a long-offline peer can't grow unbounded.
+ *  The trim is gated by an OFFSET probe so the typical case (offline
+ *  peer with < cap pending rows) skips the DELETE entirely. */
 export function enqueuePendingNotification(
   storage: Storage,
   args: { session_id: string; method: string; params: unknown; nowIso: string },
@@ -184,6 +186,14 @@ export function enqueuePendingNotification(
        VALUES (?, ?, ?, ?)`,
     )
     .run(args.session_id, args.method, JSON.stringify(args.params), args.nowIso)
+  // Gate the trim: only run it if a row exists past the cap. The
+  // SELECT short-circuits as soon as it finds row #(cap+1), so cost
+  // is O(cap+1) at worst — and zero past the first index seek when
+  // the queue is below cap.
+  const overflow = storage.db
+    .query('SELECT 1 FROM pending_notifications WHERE session_id = ? LIMIT 1 OFFSET ?')
+    .get(args.session_id, PENDING_PER_SESSION_CAP) as { 1: number } | null
+  if (!overflow) return
   storage.db
     .query(
       `DELETE FROM pending_notifications WHERE session_id = ? AND id NOT IN (

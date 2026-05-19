@@ -151,3 +151,19 @@ export function resolveRecipient(
 export function nowMsFromCtx(ctx: HandlerCtx): number {
   return Date.parse(ctx.nowIso())
 }
+
+/** Resolve a sender's display name without a DB round-trip when
+ *  possible. The sender is, by definition, the session that issued the
+ *  RPC — so its shim is connected and its display name is already in
+ *  the router cache. Falls back to a SELECT for the unusual case
+ *  where the row exists but the cache hasn't been populated (e.g. a
+ *  request arriving on the same connection between the bind() and the
+ *  set_display_name() ack). */
+export function cachedSenderName(ctx: HandlerCtx, sessionId: string): string | null {
+  const cached = ctx.router.displayNameFor(sessionId)
+  if (cached !== undefined) return cached
+  const row = ctx.storage.db
+    .query('SELECT display_name FROM sessions WHERE id = ?')
+    .get(sessionId) as { display_name: string | null } | null
+  return row?.display_name ?? null
+}

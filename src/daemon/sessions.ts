@@ -21,25 +21,32 @@ export interface NotificationSink {
 export class SessionRouter {
   private bySession = new Map<string, NotificationSink>()
   private sessionBySink = new WeakMap<NotificationSink, string>()
+  /** In-memory mirror of `sessions.display_name` for currently-bound
+   *  sessions, populated at bind() time and updated by the
+   *  set_display_name handler. Lets fan-out paths skip a SELECT per
+   *  send/broadcast/publish. */
+  private displayName = new Map<string, string | null>()
 
   /** Bind a session to a sink. If the session was already bound to a
    *  different sink (shim reconnect during a network blip, or two
    *  shims racing with the same session_id), the prior sink's reverse
    *  entry is cleared so that when the OS later delivers its `close`
    *  event we don't tear down the *new* binding via `unbindBySink`. */
-  bind(sessionId: string, sink: NotificationSink): void {
+  bind(sessionId: string, sink: NotificationSink, displayName: string | null): void {
     const prior = this.bySession.get(sessionId)
     if (prior && prior !== sink) {
       this.sessionBySink.delete(prior)
     }
     this.bySession.set(sessionId, sink)
     this.sessionBySink.set(sink, sessionId)
+    this.displayName.set(sessionId, displayName)
   }
 
   /** Drop a session binding by id. Used by the deregister handler. */
   unbindBySession(sessionId: string): void {
     const sink = this.bySession.get(sessionId)
     this.bySession.delete(sessionId)
+    this.displayName.delete(sessionId)
     if (sink) this.sessionBySink.delete(sink)
   }
 
@@ -56,10 +63,27 @@ export class SessionRouter {
       // it and we must not touch it.
       if (this.bySession.get(id) === sink) {
         this.bySession.delete(id)
+        this.displayName.delete(id)
       }
       this.sessionBySink.delete(sink)
     }
     return id
+  }
+
+  /** Update the cached display name for a bound session. Called by
+   *  the set_display_name handler after persisting to SQLite. */
+  setDisplayName(sessionId: string, displayName: string | null): void {
+    if (this.bySession.has(sessionId)) {
+      this.displayName.set(sessionId, displayName)
+    }
+  }
+
+  /** Cached display name for a session, or `undefined` if not in cache
+   *  (caller falls back to a DB SELECT). Returns `null` to mean
+   *  "session exists but has no display name", distinct from the
+   *  cache-miss case. */
+  displayNameFor(sessionId: string): string | null | undefined {
+    return this.displayName.get(sessionId)
   }
 
   /** Sink for a session, or null if not currently connected. The null

@@ -1,5 +1,11 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
-import { asObject, isRpcError, optionalString, requireString } from '#choros/daemon/helpers.ts'
+import {
+  asObject,
+  cachedSenderName,
+  isRpcError,
+  optionalString,
+  requireString,
+} from '#choros/daemon/helpers.ts'
 import { deliverOrBuffer } from '#choros/daemon/notify.ts'
 import { generateMessageId } from '#choros/identity.ts'
 import { enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
@@ -48,12 +54,7 @@ export function handlePublish(ctx: HandlerCtx, rawArgs: unknown): PublishResult 
   ).map(r => r.session_id)
 
   const msgId = generateMessageId(session_id, ctx.nowIso())
-  const senderName =
-    (
-      ctx.storage.db.query('SELECT display_name FROM sessions WHERE id = ?').get(session_id) as {
-        display_name: string | null
-      } | null
-    )?.display_name ?? null
+  const senderName = cachedSenderName(ctx, session_id)
 
   const ts = ctx.nowIso()
   const perSubIds = subscribers.map(subId => ({ subId, perSubId: `${msgId}-${subId}` }))

@@ -2,6 +2,7 @@ import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import {
   asObject,
+  cachedSenderName,
   isRpcError,
   nowMsFromCtx,
   optionalString,
@@ -51,12 +52,7 @@ export function handleBroadcast(ctx: HandlerCtx, rawArgs: unknown): BroadcastRes
     .all(session_id, liveCutoff) as { id: string; display_name: string | null }[]
 
   const msgId = generateMessageId(session_id, ctx.nowIso())
-  const senderName =
-    (
-      ctx.storage.db.query('SELECT display_name FROM sessions WHERE id = ?').get(session_id) as {
-        display_name: string | null
-      } | null
-    )?.display_name ?? null
+  const senderName = cachedSenderName(ctx, session_id)
 
   // Memoize the per-call ISO timestamp so the inserted row and every
   // recipient's notification share the same `ts`. Calling

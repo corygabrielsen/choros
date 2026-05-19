@@ -37,5 +37,6 @@ export function handleSetDisplayName(
   }
 
   ctx.storage.db.query('UPDATE sessions SET display_name = ? WHERE id = ?').run(value, session_id)
+  ctx.router.setDisplayName(session_id, value)
   return { display_name: value }
 }
