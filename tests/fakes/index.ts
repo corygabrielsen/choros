@@ -25,8 +25,14 @@ export class FakeFs implements Fs {
   constructor(private clock: { nowMs(): number } = { nowMs: () => 0 }) {}
 
   private ensureParent(path: string): void {
-    const parent = path.replace(/\/[^/]*$/, '') || '/'
-    this.dirs.add(parent)
+    const parts = path.split('/').slice(0, -1)
+    let cur = ''
+    for (const p of parts) {
+      cur += `/${p}`
+      if (cur === '/') continue
+      this.dirs.add(cur.replace(/^\/+/, '/'))
+    }
+    this.dirs.add('/')
   }
 
   async readFile(path: string): Promise<string> {
