@@ -17,3 +17,4 @@ export function resolveStateRoot(ctx: Pick<Context, 'env'>): string {
 export function projectsRoot(ctx: Pick<Context, 'env'>): string {
   return join(ctx.env.homedir(), '.claude', 'projects')
 }
+// trivial
