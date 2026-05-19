@@ -33,8 +33,21 @@
     <key>RunAtLoad</key>
     <true/>
 
+    <!--
+      KeepAlive dict-form so the daemon's own clean-exit code paths
+      (uninstall, manual `launchctl unload`) stay down, while genuine
+      crashes (segfault, SIGKILL) respawn. Using plain <true/> here
+      causes launchd to fight our hard-exit codes (e.g. exit(130) on
+      second SIGINT, exit(1) on stale-lock collision) and respawn
+      into a guaranteed-immediate-failure loop.
+    -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
 
     <key>ThrottleInterval</key>
     <integer>5</integer>

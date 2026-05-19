@@ -26,9 +26,19 @@ export function startAdminServer(opts: {
   storage: Storage
   router: SessionRouter
 }): AdminServer {
-  const server = Bun.serve({
+  // Drop idle keep-alive connections after 5s. Without this a
+  // same-uid attacker (or a buggy poller) could hold connections
+  // open indefinitely, exhausting fd budget and queuing microtasks
+  // that compete with RPC dispatch on the shared event loop.
+  //
+  // The Bun TypeScript overload for `Bun.serve({ unix: … })` doesn't
+  // surface `idleTimeout`, though the runtime accepts it on every
+  // serve form. Cast through `unknown` so we keep the strict-typed
+  // call signature on every other field.
+  const serveOptions = {
     unix: opts.socketPath,
-    fetch(req): Response {
+    idleTimeout: 5,
+    fetch(req: Request): Response {
       // Reject non-GET methods so future writeable endpoints have to
       // be opted into explicitly.
       if (req.method !== 'GET') {
@@ -89,7 +99,8 @@ export function startAdminServer(opts: {
           return new Response('not found', { status: 404 })
       }
     },
-  })
+  }
+  const server = Bun.serve(serveOptions as unknown as Parameters<typeof Bun.serve>[0])
 
   // Restrict the admin socket to user-only after Bun creates it. The
   // default mode is 0755 which would let any local process on the box

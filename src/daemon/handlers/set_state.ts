@@ -2,6 +2,13 @@ import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { asObject, isRpcError, optionalString, requireString } from '#choros/daemon/helpers.ts'
 import { ERR_INVALID_PARAMS, ERR_UNKNOWN_SESSION, type RpcError } from '#choros/protocol/methods.ts'
 
+/** Tighter cap than {@link DEFAULT_STRING_MAX} for ambient state.
+ *  agent_status / agent_intent surface in /peers, doctor reports,
+ *  and channel meta — 1 KiB is enough for a single-line "what I'm
+ *  doing" without letting a peer pump 8 KiB blobs into every other
+ *  shim's CC log via the doctor view. */
+const STATE_FIELD_MAX_BYTES = 1024
+
 export interface SetStateResult {
   status?: string | null
   intent?: string | null
@@ -16,7 +23,7 @@ function parseArgs(
   const session_id = requireString(obj, 'session_id', field)
   if (isRpcError(session_id)) return session_id
   // Empty text clears the field; that's a legal value, not a missing one.
-  const text = optionalString(obj, 'text', field)
+  const text = optionalString(obj, 'text', field, STATE_FIELD_MAX_BYTES)
   if (isRpcError(text)) return text
   if (text === undefined) {
     return { code: ERR_INVALID_PARAMS, message: `${field}: "text" is required (empty to clear)` }
