@@ -1,6 +1,6 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { asObject, isRpcError, requireString } from '#choros/daemon/helpers.ts'
-import type { RpcError } from '#choros/protocol/methods.ts'
+import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
 
 export interface SubscribeResult {
   subscribed: string[]
@@ -20,9 +20,12 @@ function parseArgs(
   if (isRpcError(session_id)) return session_id
   const topic = requireString(obj, 'topic', label, TOPIC_MAX_BYTES)
   if (isRpcError(topic)) return topic
-  const t = topic.trim()
+  // Canonicalize: trim + lowercase. Topics are channel names, not user
+  // strings — `subscribe('FOO')` and `publish('foo')` should reach
+  // each other. Case-sensitivity here was a silent subscriber-miss.
+  const t = topic.trim().toLowerCase()
   if (t.length === 0) {
-    return { code: -32602, message: `${label}: "topic" must be non-empty` }
+    return { code: ERR_INVALID_PARAMS, message: `${label}: "topic" must be non-empty` }
   }
   return { session_id, topic: t }
 }

@@ -54,6 +54,11 @@ export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): R
   // Per-connection line buffer. Bun's socket `data` callback may
   // deliver partial NDJSON; we accumulate until a `\n` arrives.
   const buffers = new WeakMap<object, string>()
+  // Per-connection "dropped" sentinel: when a connection sends an
+  // oversized frame we call socket.end() but more chunks may arrive
+  // before the close event fires. This set lets us ignore those
+  // chunks instead of starting a fresh buffer that could re-overflow.
+  const dropped = new WeakSet<object>()
 
   const listener = Bun.listen<NotificationSink>({
     unix: opts.socketPath,
@@ -82,6 +87,7 @@ export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): R
       },
       data(socket, chunk) {
         const key = socket as unknown as object
+        if (dropped.has(key)) return
         const sink = (socket as unknown as { data: NotificationSink }).data
         let buf = buffers.get(key) ?? ''
         buf += chunk.toString('utf8')
@@ -92,12 +98,13 @@ export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): R
           process.stderr.write(
             `[choros-daemon] connection sent oversized frame (${buf.length}B > ${MAX_FRAME_BYTES}B); dropping\n`,
           )
+          dropped.add(key)
+          buffers.delete(key)
           try {
             socket.end()
           } catch {
             /* already gone */
           }
-          buffers.delete(key)
           return
         }
         let nl = buf.indexOf('\n')
@@ -211,8 +218,13 @@ function dispatch(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): Rpc
         return { code: ERR_METHOD_NOT_FOUND, message: `unknown method: ${req.method}` }
     }
   } catch (e: unknown) {
+    // Log the underlying error to stderr for operators but never
+    // surface SQLite / runtime detail over the wire — message content
+    // ("UNIQUE constraint failed: messages.id", file paths, etc) leaks
+    // schema + filesystem hints to callers.
     const m = e instanceof Error ? e.message : String(e)
-    return { code: ERR_INTERNAL, message: `internal error: ${m}` }
+    process.stderr.write(`[choros-daemon] handler ${req.method} threw: ${m}\n`)
+    return { code: ERR_INTERNAL, message: 'internal error' }
   }
 }
 

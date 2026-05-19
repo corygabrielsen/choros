@@ -26,7 +26,9 @@ export function handlePublish(ctx: HandlerCtx, rawArgs: unknown): PublishResult 
   if (isRpcError(session_id)) return session_id
   const topic = requireString(obj, 'topic', 'publish')
   if (isRpcError(topic)) return topic
-  const topicTrimmed = topic.trim()
+  // Match subscribe()'s canonicalization so `publish('FOO')` reaches
+  // `subscribe('foo')`. Topics are channel names.
+  const topicTrimmed = topic.trim().toLowerCase()
   if (topicTrimmed.length === 0) {
     return { code: ERR_INVALID_PARAMS, message: 'publish: "topic" must be non-empty' }
   }
