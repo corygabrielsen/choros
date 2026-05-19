@@ -55,26 +55,33 @@ export function handlePublish(ctx: HandlerCtx, rawArgs: unknown): PublishResult 
       } | null
     )?.display_name ?? null
 
+  const ts = ctx.nowIso()
+  const perSubIds = subscribers.map(subId => ({ subId, perSubId: `${msgId}-${subId}` }))
+
   ctx.storage.db.transaction(() => {
     const insert = ctx.storage.db.query(
       `INSERT INTO messages (id, from_session, to_session, topic, body, act, ts)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    for (const subId of subscribers) {
-      const perSubId = `${msgId}-${subId}`
-      insert.run(perSubId, session_id, subId, topicTrimmed, body, act ?? null, ctx.nowIso())
-      deliverOrBuffer(ctx, subId, NOTIFY_INBOUND_MESSAGE, {
-        msg_id: perSubId,
-        from_session: session_id,
-        from_name: senderName,
-        to_session: subId,
-        topic: topicTrimmed,
-        body,
-        ts: ctx.nowIso(),
-        ...(act ? { act } : {}),
-      })
+    for (const { perSubId, subId } of perSubIds) {
+      insert.run(perSubId, session_id, subId, topicTrimmed, body, act ?? null, ts)
     }
   })()
+
+  // Fan out notifications AFTER commit; otherwise the WAL writer
+  // lock is held across N socket writes.
+  for (const { perSubId, subId } of perSubIds) {
+    deliverOrBuffer(ctx, subId, NOTIFY_INBOUND_MESSAGE, {
+      msg_id: perSubId,
+      from_session: session_id,
+      from_name: senderName,
+      to_session: subId,
+      topic: topicTrimmed,
+      body,
+      ts,
+      ...(act ? { act } : {}),
+    })
+  }
 
   return { msg_id: msgId, topic: topicTrimmed, delivered_to: subscribers }
 }

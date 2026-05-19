@@ -2,6 +2,17 @@ import { open, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { encodedCwd, UUID_RE } from '#choros/identity.ts'
 
+/** Per-shim cache of the most-recently-resolved JSONL mtime + value.
+ *  The shim polls `/rename` every heartbeat (30s); 99% of polls find
+ *  no change. Skip the full tail-read when the file's mtime hasn't
+ *  advanced since the last resolution. */
+interface MtimeCache {
+  jsonl: string
+  mtimeMs: number
+  value: string | null
+}
+let cache: MtimeCache | null = null
+
 /** Tail-window size for the JSONL scan. CC writes title events as the
  *  session lives; the most recent ones sit at the file's tail, so a
  *  64 KB read covers the typical case without buffering multi-MB
@@ -25,6 +36,18 @@ export async function resolveDisplayName(opts: {
 }): Promise<string | null> {
   const jsonl = await findJsonl(opts)
   if (!jsonl) return null
+  // mtime check first — heartbeat polls this every 30s; the JSONL
+  // rarely advances between polls so a stat() + cache hit is cheaper
+  // than re-reading the 64 KB tail.
+  let mtimeMs: number
+  try {
+    mtimeMs = (await stat(jsonl)).mtimeMs
+  } catch {
+    return null
+  }
+  if (cache && cache.jsonl === jsonl && cache.mtimeMs === mtimeMs) {
+    return cache.value
+  }
   let chunk: string
   try {
     const fh = await open(jsonl, 'r')
@@ -43,13 +66,17 @@ export async function resolveDisplayName(opts: {
   const lines = chunk.split('\n')
   if (lines.length > 0 && chunk.length > DISPLAY_NAME_TAIL_BYTES) lines.shift()
   let aiFallback: string | null = null
+  let result: string | null = null
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]
     if (!line) continue
     if (!(line.includes('"custom-title"') || line.includes('"ai-title"'))) continue
     try {
       const ev = JSON.parse(line)
-      if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') return ev.customTitle
+      if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {
+        result = ev.customTitle
+        break
+      }
       if (aiFallback === null && ev?.type === 'ai-title' && typeof ev.aiTitle === 'string') {
         aiFallback = ev.aiTitle
       }
@@ -57,7 +84,9 @@ export async function resolveDisplayName(opts: {
       /* skip unparseable */
     }
   }
-  return aiFallback
+  const value = result ?? aiFallback
+  cache = { jsonl, mtimeMs, value }
+  return value
 }
 
 async function findJsonl(opts: {

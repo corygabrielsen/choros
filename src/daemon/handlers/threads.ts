@@ -182,36 +182,35 @@ export function handleSendToThread(
       } | null
     )?.display_name ?? null
 
+  const ts = ctx.nowIso()
+  const replyTrim = replyTo?.trim() || null
+  const perPeerIds = recipients.map(peer => ({ peer, perPeerId: `${msgId}-${peer}` }))
+
   ctx.storage.db.transaction(() => {
     const insert = ctx.storage.db.query(
       `INSERT INTO messages (id, from_session, to_session, thread_id, body, act, in_reply_to, ts)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    for (const peer of recipients) {
-      const perPeerId = `${msgId}-${peer}`
-      insert.run(
-        perPeerId,
-        session_id,
-        peer,
-        thread_id,
-        body,
-        act ?? null,
-        replyTo?.trim() || null,
-        ctx.nowIso(),
-      )
-      deliverOrBuffer(ctx, peer, NOTIFY_INBOUND_MESSAGE, {
-        msg_id: perPeerId,
-        from_session: session_id,
-        from_name: senderName,
-        to_session: peer,
-        thread_id,
-        body,
-        ts: ctx.nowIso(),
-        ...(act ? { act } : {}),
-        ...(replyTo?.trim() ? { in_reply_to: replyTo.trim() } : {}),
-      })
+    for (const { perPeerId, peer } of perPeerIds) {
+      insert.run(perPeerId, session_id, peer, thread_id, body, act ?? null, replyTrim, ts)
     }
   })()
+
+  // Fan-out happens AFTER commit so socket writes don't hold the WAL
+  // writer lock and starve concurrent writers.
+  for (const { perPeerId, peer } of perPeerIds) {
+    deliverOrBuffer(ctx, peer, NOTIFY_INBOUND_MESSAGE, {
+      msg_id: perPeerId,
+      from_session: session_id,
+      from_name: senderName,
+      to_session: peer,
+      thread_id,
+      body,
+      ts,
+      ...(act ? { act } : {}),
+      ...(replyTrim ? { in_reply_to: replyTrim } : {}),
+    })
+  }
 
   return { msg_id: msgId, thread_id, delivered_to: recipients }
 }

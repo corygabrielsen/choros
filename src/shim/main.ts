@@ -211,7 +211,10 @@ server.setRequestHandler(ListToolsRequestSchema, () =>
 server.setRequestHandler(CallToolRequestSchema, async req => {
   const args = injectSession(req.params.arguments as Record<string, unknown> | undefined)
   const result = await rpc.call(`choros.${req.params.name}`, args)
-  return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  // Compact JSON — pretty-print costs ~2× bytes + CPU per tool call
+  // and the consumer is the CC agent, which doesn't care about
+  // human-readable indentation.
+  return { content: [{ type: 'text', text: JSON.stringify(result) }] }
 })
 
 await server.connect(new StdioServerTransport())
