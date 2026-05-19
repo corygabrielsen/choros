@@ -2,6 +2,7 @@ import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { recordHeartbeat } from '#choros/daemon/storage.ts'
 import {
   ERR_INVALID_PARAMS,
+  ERR_UNKNOWN_SESSION,
   type HeartbeatArgs,
   type HeartbeatResult,
   type RpcError,
@@ -36,16 +37,24 @@ function validateHeartbeatArgs(args: unknown): RpcError | HeartbeatArgs {
 }
 
 /** Periodic shim → daemon ping. Refreshes heartbeat_at + lock_pid +
- *  ambient agent state. Replaces the on-disk `.heartbeat` write. */
+ *  ambient agent state. Returns ERR_UNKNOWN_SESSION when the session
+ *  was deregistered (or never registered) so the shim re-registers
+ *  rather than continuing to ping into the void. */
 export function handleHeartbeat(ctx: HandlerCtx, rawArgs: unknown): HeartbeatResult | RpcError {
   const parsed = validateHeartbeatArgs(rawArgs)
   if ('code' in parsed) return parsed
-  recordHeartbeat(ctx.storage, {
+  const updated = recordHeartbeat(ctx.storage, {
     session_id: parsed.session_id,
     pid: parsed.pid,
     agent_status: parsed.agent_status ?? null,
     agent_intent: parsed.agent_intent ?? null,
     nowIso: ctx.nowIso(),
   })
+  if (!updated) {
+    return {
+      code: ERR_UNKNOWN_SESSION,
+      message: 'heartbeat: session not registered (re-register required)',
+    }
+  }
   return { acknowledged: true }
 }

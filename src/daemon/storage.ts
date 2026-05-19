@@ -130,7 +130,12 @@ export function clearSessionLock(storage: Storage, sessionId: string): void {
     .run(sessionId)
 }
 
-/** Update heartbeat + ambient state from a periodic shim heartbeat. */
+/** Update heartbeat + ambient state from a periodic shim heartbeat.
+ *  Conditional on the session still having an active lock — a
+ *  heartbeat arriving after deregister (e.g. the shim's heartbeat
+ *  interval racing the shim's own shutdown) MUST NOT resurrect the
+ *  lock_pid and turn a deregistered session back into "alive" for
+ *  peer enumeration. Returns true iff the update affected a row. */
 export function recordHeartbeat(
   storage: Storage,
   args: {
@@ -140,17 +145,18 @@ export function recordHeartbeat(
     agent_intent: string | null
     nowIso: string
   },
-): void {
-  storage.db
+): boolean {
+  const result = storage.db
     .query(
       `UPDATE sessions SET
          heartbeat_at = ?,
          lock_pid = ?,
          agent_status = COALESCE(?, agent_status),
          agent_intent = COALESCE(?, agent_intent)
-       WHERE id = ?`,
+       WHERE id = ? AND lock_pid IS NOT NULL`,
     )
     .run(args.nowIso, args.pid, args.agent_status, args.agent_intent, args.session_id)
+  return result.changes > 0
 }
 
 /* --- Pending-notifications queue (used by Phase 3) --------------------- */

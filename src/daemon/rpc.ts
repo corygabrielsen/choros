@@ -7,6 +7,7 @@ import { handlePublish } from '#choros/daemon/handlers/publish.ts'
 import { handleReact } from '#choros/daemon/handlers/react.ts'
 import { type HandlerCtx, handleRegister } from '#choros/daemon/handlers/register.ts'
 import { handleSend } from '#choros/daemon/handlers/send.ts'
+import { handleSetDisplayName } from '#choros/daemon/handlers/set_display_name.ts'
 import { handleSetIntent, handleSetStatus } from '#choros/daemon/handlers/set_state.ts'
 import { handleSubscribe, handleUnsubscribe } from '#choros/daemon/handlers/subscribe.ts'
 import {
@@ -34,10 +35,19 @@ export interface RpcServer {
   stop(): Promise<void>
 }
 
+/** Maximum bytes a single NDJSON frame may occupy. A peer that
+ *  streams without newlines would otherwise grow the per-connection
+ *  buffer until V8's string limit; this cap turns that DoS into a
+ *  bounded error. 4 MiB is well above the 64 KB body cap plus all
+ *  envelope overhead and per-recipient drain frames in pending
+ *  notifications. */
+export const MAX_FRAME_BYTES = 4 * 1024 * 1024
+
 /** Spawn a JSON-RPC 2.0 server on a Unix socket. Each connection
- *  speaks NDJSON — one message per line. The server dispatches to
- *  the Phase 1 handlers (register / deregister / heartbeat); unknown
- *  methods return a JSON-RPC method-not-found error. */
+ *  speaks NDJSON — one message per line, capped at {@link
+ *  MAX_FRAME_BYTES}. The server dispatches to the registered
+ *  handlers; unknown methods return a JSON-RPC method-not-found
+ *  error. */
 export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): RpcServer {
   // Per-connection line buffer. Bun's socket `data` callback may
   // deliver partial NDJSON; we accumulate until a `\n` arrives.
@@ -49,21 +59,19 @@ export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): R
       open(socket) {
         const sink: NotificationSink = {
           write(line) {
-            // Bun's socket.write returns the bytes accepted; for a
-            // Unix datagram this is reliable in practice, but we
-            // don't fail loud on partial writes — the daemon's
-            // notification path handles partial delivery as "shim
-            // dropped, requeue".
+            // Returns true iff the bytes were handed to the kernel.
+            // The daemon's notification path falls back to the
+            // pending-notifications queue when this returns false.
+            const ready = String(socket.readyState) === 'open' || socket.readyState === 1
+            if (!ready) return false
             try {
               socket.write(line.endsWith('\n') ? line : `${line}\n`)
+              return true
             } catch {
-              /* socket gone; isOpen will catch on next check */
+              return false
             }
           },
           isOpen() {
-            // Bun's `socket.readyState` is a numeric enum in some
-            // releases and a string union in others; coerce to a
-            // string for the comparison so both shapes are handled.
             return String(socket.readyState) === 'open' || socket.readyState === 1
           },
         }
@@ -75,6 +83,21 @@ export function startRpcServer(opts: { socketPath: string; ctx: HandlerCtx }): R
         const sink = (socket as unknown as { data: NotificationSink }).data
         let buf = buffers.get(key) ?? ''
         buf += chunk.toString('utf8')
+        if (buf.length > MAX_FRAME_BYTES) {
+          // Drop the connection rather than grow unbounded. Frames
+          // larger than the cap come either from a buggy client or a
+          // DoS attempt; either way we want bounded memory.
+          process.stderr.write(
+            `[choros-daemon] connection sent oversized frame (${buf.length}B > ${MAX_FRAME_BYTES}B); dropping\n`,
+          )
+          try {
+            socket.end()
+          } catch {
+            /* already gone */
+          }
+          buffers.delete(key)
+          return
+        }
         let nl = buf.indexOf('\n')
         while (nl >= 0) {
           const line = buf.slice(0, nl)
@@ -119,9 +142,14 @@ function processLine(line: string, sink: NotificationSink, ctx: HandlerCtx): Rpc
   if (req?.jsonrpc !== '2.0' || typeof req.method !== 'string') {
     return errResponse(req?.id ?? null, ERR_INVALID_REQUEST, 'invalid JSON-RPC envelope')
   }
-  // JSON-RPC notifications (no id field) are intentionally one-way;
-  // the shim never sends them today, but reserve the shape anyway.
-  if (req.id === undefined) return null
+  // JSON-RPC notifications are requests with NO id field. Both `id`
+  // absent and `id: null` are treated as notifications (per spec,
+  // null id in requests is reserved; we ignore them to avoid sending
+  // responses to id=null that would collide with parse-error replies).
+  if (req.id === undefined || req.id === null) return null
+  if (typeof req.id !== 'number' && typeof req.id !== 'string') {
+    return errResponse(null, ERR_INVALID_REQUEST, 'invalid id type')
+  }
   const outcome = dispatch(req, sink, ctx)
   if (outcome && typeof outcome === 'object' && 'code' in outcome && 'message' in outcome) {
     return { jsonrpc: '2.0', id: req.id, error: outcome as RpcError }
@@ -154,6 +182,8 @@ function dispatch(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): Rpc
         return handleSetStatus(ctx, req.params)
       case 'choros.set_intent':
         return handleSetIntent(ctx, req.params)
+      case 'choros.set_display_name':
+        return handleSetDisplayName(ctx, req.params)
       case 'choros.doctor':
         return handleDoctor(ctx, req.params)
       case 'choros.join_thread':
@@ -178,5 +208,12 @@ function dispatch(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): Rpc
 }
 
 function errResponse(id: RpcRequest['id'] | null, code: number, message: string): RpcResponse {
-  return { jsonrpc: '2.0', id: id ?? 0, error: { code, message } }
+  // Per JSON-RPC 2.0, a response for an un-parseable request uses
+  // id=null. Don't coerce null to 0 — that would collide with a
+  // legitimate response for id=0.
+  return {
+    jsonrpc: '2.0',
+    id: id ?? (null as unknown as RpcRequest['id']),
+    error: { code, message },
+  }
 }

@@ -24,24 +24,32 @@ interface PendingHandler {
   reject: (err: Error) => void
 }
 
-/** Open a connection to the daemon. On disconnect, the client
- *  attempts a single reconnect after `reconnectDelayMs` so a daemon
- *  bounce (systemd restart, upgrade) doesn't tear down the shim. */
+/** Max bytes for a single NDJSON frame from the daemon. Matches the
+ *  daemon's server-side cap so the shim never wedges on an oversized
+ *  drain frame. */
+const MAX_FRAME_BYTES = 4 * 1024 * 1024
+
+/** Reconnect backoff schedule: 1s, 2s, 4s, 8s, …, capped at 30s. */
+const RECONNECT_INITIAL_MS = 1_000
+const RECONNECT_MAX_MS = 30_000
+
+/** Open a connection to the daemon. On disconnect, retries forever
+ *  with exponential backoff (1s → 30s cap) so a daemon outage longer
+ *  than a single retry doesn't permanently strand the shim. */
 export async function connectRpcClient(opts: {
   socketPath: string
   onNotification: NotificationHandler
   /** Called once each time the socket reconnects (initial connect
    *  counts as one). Useful for re-registering the session. */
   onConnect?: () => void | Promise<void>
-  reconnectDelayMs?: number
 }): Promise<RpcClient> {
   let buf = ''
   let idCounter = 0
   const pending = new Map<number, PendingHandler>()
   let socket: Awaited<ReturnType<typeof Bun.connect>> | null = null
   let closed = false
-  let reconnecting = false
-  const reconnectDelay = opts.reconnectDelayMs ?? 1_000
+  let reconnectDelay = RECONNECT_INITIAL_MS
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   function dispatchMessage(raw: string): void {
     let msg: RpcResponse | { method: string; params: unknown; id?: undefined }
@@ -50,20 +58,34 @@ export async function connectRpcClient(opts: {
     } catch {
       return
     }
-    if ('id' in msg && msg.id !== undefined) {
-      const id = typeof msg.id === 'number' ? msg.id : Number.parseInt(String(msg.id), 10)
-      const handler = pending.get(id)
-      if (!handler) return
-      pending.delete(id)
-      if ('error' in msg) handler.reject(new Error(`rpc: ${msg.error.message}`))
-      else handler.resolve(msg.result)
-    } else if ('method' in msg) {
-      opts.onNotification(msg.method, msg.params)
+    if (!('id' in msg) || msg.id === undefined) {
+      if ('method' in msg && typeof msg.method === 'string') {
+        opts.onNotification(msg.method, msg.params)
+      }
+      return
     }
+    if (typeof msg.id !== 'number') return
+    const handler = pending.get(msg.id)
+    if (!handler) return
+    pending.delete(msg.id)
+    if ('error' in msg) handler.reject(new Error(`rpc: ${msg.error.message}`))
+    else handler.resolve(msg.result)
   }
 
   function onData(chunk: Buffer): void {
     buf += chunk.toString('utf8')
+    if (buf.length > MAX_FRAME_BYTES) {
+      process.stderr.write(
+        `[choros-shim] daemon sent oversized frame (${buf.length}B); closing connection\n`,
+      )
+      try {
+        socket?.end()
+      } catch {
+        /* already gone */
+      }
+      buf = ''
+      return
+    }
     let nl = buf.indexOf('\n')
     while (nl >= 0) {
       const line = buf.slice(0, nl)
@@ -73,7 +95,33 @@ export async function connectRpcClient(opts: {
     }
   }
 
+  function scheduleReconnect(): void {
+    if (closed || reconnectTimer) return
+    const delay = reconnectDelay
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      if (closed) return
+      void open()
+        .then(async () => {
+          // Successful reconnect resets the backoff for the next outage.
+          reconnectDelay = RECONNECT_INITIAL_MS
+          if (opts.onConnect) await opts.onConnect()
+        })
+        .catch(err => {
+          process.stderr.write(
+            `[choros-shim] reconnect failed (${err instanceof Error ? err.message : err}); retrying in ${reconnectDelay}ms\n`,
+          )
+          scheduleReconnect()
+        })
+    }, delay)
+    reconnectTimer.unref?.()
+  }
+
   async function open(): Promise<void> {
+    // Reset per-connection state so half-frames from a prior socket
+    // don't corrupt the first response after reconnect.
+    buf = ''
     socket = await Bun.connect({
       unix: opts.socketPath,
       socket: {
@@ -84,21 +132,9 @@ export async function connectRpcClient(opts: {
           socket = null
           for (const [, h] of pending) h.reject(new Error('rpc: connection closed'))
           pending.clear()
-          if (closed || reconnecting) return
-          reconnecting = true
-          setTimeout(() => {
-            reconnecting = false
-            if (closed) return
-            void open()
-              .then(async () => {
-                if (opts.onConnect) await opts.onConnect()
-              })
-              .catch(err => {
-                process.stderr.write(
-                  `[choros-shim] reconnect failed: ${err instanceof Error ? err.message : err}\n`,
-                )
-              })
-          }, reconnectDelay)
+          buf = ''
+          if (closed) return
+          scheduleReconnect()
         },
       },
     })
@@ -119,6 +155,10 @@ export async function connectRpcClient(opts: {
     },
     close(): Promise<void> {
       closed = true
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
       socket?.end()
       socket = null
       return Promise.resolve()

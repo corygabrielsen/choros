@@ -6,12 +6,13 @@
  */
 
 /** Anything that can write a line of NDJSON. The RPC server's per-
- *  connection socket implements this; tests can pass a mock. */
+ *  connection socket implements this; tests can pass a mock. Write
+ *  returns false when the underlying transport has gone — callers
+ *  re-buffer via `enqueuePendingNotification` in that case so the
+ *  notification isn't silently dropped. */
 export interface NotificationSink {
-  write(line: string): void
-  /** True iff the underlying transport is still open. The daemon
-   *  checks this before each push so a half-closed socket doesn't
-   *  silently drop notifications. */
+  write(line: string): boolean
+  /** True iff the underlying transport is still open. */
   isOpen(): boolean
 }
 
@@ -21,14 +22,15 @@ export class SessionRouter {
   private bySession = new Map<string, NotificationSink>()
   private sessionBySink = new WeakMap<NotificationSink, string>()
 
-  /** Bind a session to a sink. If the session was already bound to
-   *  another sink (e.g. shim reconnect during a network blip), the
-   *  old sink is dropped — the freshly-registered shim wins. */
+  /** Bind a session to a sink. If the session was already bound to a
+   *  different sink (shim reconnect during a network blip, or two
+   *  shims racing with the same session_id), the prior sink's reverse
+   *  entry is cleared so that when the OS later delivers its `close`
+   *  event we don't tear down the *new* binding via `unbindBySink`. */
   bind(sessionId: string, sink: NotificationSink): void {
     const prior = this.bySession.get(sessionId)
     if (prior && prior !== sink) {
-      // Best-effort: don't close the old sink, just drop the binding.
-      // The daemon's per-connection close handler will handle it.
+      this.sessionBySink.delete(prior)
     }
     this.bySession.set(sessionId, sink)
     this.sessionBySink.set(sink, sessionId)
@@ -42,20 +44,26 @@ export class SessionRouter {
   }
 
   /** Drop a session binding by sink. Used when a connection closes
-   *  uncleanly (CC crash, socket reset) — we don't know the
-   *  session_id from the socket alone unless we recorded it on
-   *  register. */
+   *  uncleanly (CC crash, socket reset). No-op when the sink has
+   *  already been replaced by a newer one for the same session — the
+   *  reverse lookup will miss and we won't accidentally tear down the
+   *  fresh binding. */
   unbindBySink(sink: NotificationSink): string | null {
     const id = this.sessionBySink.get(sink) ?? null
     if (id !== null) {
-      this.bySession.delete(id)
+      // Only clear the forward binding if it still points at THIS sink.
+      // Otherwise a newer connection for the same session has replaced
+      // it and we must not touch it.
+      if (this.bySession.get(id) === sink) {
+        this.bySession.delete(id)
+      }
       this.sessionBySink.delete(sink)
     }
     return id
   }
 
-  /** Sink for a session, or null if not currently connected. The
-   *  null case means the daemon should buffer notifications via
+  /** Sink for a session, or null if not currently connected. The null
+   *  case means the daemon should buffer notifications via
    *  `enqueuePendingNotification`. */
   sinkFor(sessionId: string): NotificationSink | null {
     const sink = this.bySession.get(sessionId)

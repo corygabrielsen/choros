@@ -25,10 +25,11 @@ export interface RpcRequest<P = unknown> {
 }
 
 /** Standard JSON-RPC 2.0 response envelope. Exactly one of `result`
- *  or `error` is present. */
+ *  or `error` is present. The id is null when the request that
+ *  triggered the response was un-parseable or had an invalid id. */
 export type RpcResponse<R = unknown> =
-  | { jsonrpc: '2.0'; id: number | string; result: R }
-  | { jsonrpc: '2.0'; id: number | string; error: RpcError }
+  | { jsonrpc: '2.0'; id: number | string | null; result: R }
+  | { jsonrpc: '2.0'; id: number | string | null; error: RpcError }
 
 /** Standard JSON-RPC 2.0 error envelope. Codes mirror the spec where
  *  they apply (-32601 for unknown method, -32602 for invalid params)
