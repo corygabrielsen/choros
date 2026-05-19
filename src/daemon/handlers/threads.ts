@@ -59,11 +59,18 @@ export function handleJoinThread(ctx: HandlerCtx, rawArgs: unknown): JoinThreadR
     )
     .run(thread_id, session_id, ctx.nowIso())
 
+  // Thread messages are stored one row per recipient (mirrors v0's
+  // per-recipient inbox). The backlog query collapses those back into
+  // one row per logical message — without this dedupe, a joiner would
+  // see N-1 copies of every prior message where N is the historical
+  // member count when it was sent.
   const backlog = (
     ctx.storage.db
       .query(
-        `SELECT id, from_session, body, ts, in_reply_to FROM messages
-         WHERE thread_id = ? ORDER BY ts ASC`,
+        `SELECT MIN(id) AS id, from_session, body, ts, in_reply_to FROM messages
+         WHERE thread_id = ?
+         GROUP BY from_session, ts, body, COALESCE(in_reply_to, '')
+         ORDER BY ts ASC`,
       )
       .all(thread_id) as {
       id: string
@@ -146,7 +153,10 @@ export function handleListThreads(ctx: HandlerCtx, rawArgs: unknown): ListThread
 }
 
 export interface SendToThreadResult {
-  msg_id: string
+  /** Null when the thread had no recipients (sender is the only
+   *  member); nothing is persisted in that case so a follow-up
+   *  react/mark_read against a fabricated id would fail. */
+  msg_id: string | null
   thread_id: string
   delivered_to: string[]
 }
@@ -193,6 +203,10 @@ export function handleSendToThread(
       .query('SELECT session_id FROM thread_members WHERE thread_id = ? AND session_id != ?')
       .all(thread_id, session_id) as { session_id: string }[]
   ).map(r => r.session_id)
+
+  if (recipients.length === 0) {
+    return { msg_id: null, thread_id, delivered_to: [] }
+  }
 
   const msgId = generateMessageId(session_id, ctx.nowIso())
   const senderName = cachedSenderName(ctx, session_id)

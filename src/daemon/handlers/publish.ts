@@ -13,7 +13,10 @@ import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
 import { NOTIFY_INBOUND_MESSAGE } from '#choros/protocol/notifications.ts'
 
 export interface PublishResult {
-  msg_id: string
+  /** Null when the topic has no subscribers; nothing is persisted in
+   *  that case so a follow-up react against a fabricated id would
+   *  fail. The caller treats null as "noone heard this." */
+  msg_id: string | null
   topic: string
   delivered_to: string[]
 }
@@ -54,6 +57,10 @@ export function handlePublish(ctx: HandlerCtx, rawArgs: unknown): PublishResult 
       .query('SELECT session_id FROM subscriptions WHERE topic = ? AND session_id != ?')
       .all(topicTrimmed, session_id) as { session_id: string }[]
   ).map(r => r.session_id)
+
+  if (subscribers.length === 0) {
+    return { msg_id: null, topic: topicTrimmed, delivered_to: [] }
+  }
 
   const msgId = generateMessageId(session_id, ctx.nowIso())
   const senderName = cachedSenderName(ctx, session_id)

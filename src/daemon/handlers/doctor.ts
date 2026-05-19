@@ -3,6 +3,17 @@ import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { asObject, isRpcError, nowMsFromCtx, requireString } from '#choros/daemon/helpers.ts'
 import type { RpcError } from '#choros/protocol/methods.ts'
 
+/** Max peers returned by doctor. Without this, agent_status /
+ *  agent_intent — both 8 KB strings the operator may have set
+ *  assuming session-internal scope — would be enumerable across the
+ *  daemon's entire history. doctor's purpose is "what's near me right
+ *  now," not a long-tail audit log. */
+const DOCTOR_PEER_CAP = 64
+/** Drop peers whose heartbeat is older than this from the doctor
+ *  report. Past DEAD_AGE_MS the row carries no useful diagnostic
+ *  signal — only stale ambient state. */
+const DOCTOR_PEER_HEARTBEAT_CUTOFF_MS = DEAD_AGE_MS
+
 export type Classification = 'live' | 'wedged' | 'stale' | 'dead' | 'none'
 
 export interface DoctorPeer {
@@ -58,12 +69,16 @@ export function handleDoctor(ctx: HandlerCtx, rawArgs: unknown): DoctorReport | 
   ).n
 
   const now = nowMsFromCtx(ctx)
+  const recencyCutoff = new Date(now - DOCTOR_PEER_HEARTBEAT_CUTOFF_MS).toISOString()
   const peerRows = ctx.storage.db
     .query(
       `SELECT id, display_name, heartbeat_at, lock_pid, wedged_at, agent_status, agent_intent
-       FROM sessions WHERE id != ? ORDER BY heartbeat_at DESC NULLS LAST`,
+       FROM sessions
+       WHERE id != ? AND heartbeat_at IS NOT NULL AND heartbeat_at >= ?
+       ORDER BY heartbeat_at DESC NULLS LAST
+       LIMIT ?`,
     )
-    .all(sessionId) as {
+    .all(sessionId, recencyCutoff, DOCTOR_PEER_CAP) as {
     id: string
     display_name: string | null
     heartbeat_at: string | null
