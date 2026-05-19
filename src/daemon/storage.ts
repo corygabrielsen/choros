@@ -9,7 +9,7 @@ const SQL_DIR = `${HERE}/../sql`
 /** Current schema version the daemon binary expects. `applyMigrations`
  *  brings any older database up to this number. Bump when adding a new
  *  migration file `src/sql/NNN-*.sql`. */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 /** Ordered migration files. Each is applied if and only if the current
  *  `system_meta.schema_version` is below the file's target version.
@@ -18,6 +18,7 @@ const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: readFileSync(`${SQL_DIR}/000-init.sql`, 'utf8') },
   { version: 2, sql: readFileSync(`${SQL_DIR}/001-display-name-index.sql`, 'utf8') },
   { version: 3, sql: readFileSync(`${SQL_DIR}/002-hot-path-indexes.sql`, 'utf8') },
+  { version: 4, sql: readFileSync(`${SQL_DIR}/003-narrower-indexes.sql`, 'utf8') },
 ]
 
 /** Opaque storage handle. Daemon code uses `db` directly for queries
@@ -108,7 +109,9 @@ export interface SessionRow {
 }
 
 /** Upsert a session's identity + lock. Called from the register
- *  handler. Returns the row as it now exists in the DB. */
+ *  handler. Returns the row as it now exists in the DB via the
+ *  `RETURNING *` clause — one statement instead of insert-then-
+ *  select. */
 export function upsertSession(
   storage: Storage,
   args: {
@@ -120,7 +123,7 @@ export function upsertSession(
     nowIso: string
   },
 ): SessionRow {
-  storage.db
+  return storage.db
     .query(
       `INSERT INTO sessions (id, display_name, host, cwd, lock_pid, lock_started_at, heartbeat_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -130,10 +133,18 @@ export function upsertSession(
          cwd = excluded.cwd,
          lock_pid = excluded.lock_pid,
          lock_started_at = excluded.lock_started_at,
-         heartbeat_at = excluded.heartbeat_at`,
+         heartbeat_at = excluded.heartbeat_at
+       RETURNING *`,
     )
-    .run(args.id, args.display_name, args.host, args.cwd, args.pid, args.nowIso, args.nowIso)
-  return storage.db.query('SELECT * FROM sessions WHERE id = ?').get(args.id) as SessionRow
+    .get(
+      args.id,
+      args.display_name,
+      args.host,
+      args.cwd,
+      args.pid,
+      args.nowIso,
+      args.nowIso,
+    ) as SessionRow
 }
 
 /** Clear the lock_pid for a session at clean shutdown. Row history is

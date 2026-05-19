@@ -22,12 +22,16 @@ export interface TestDaemon {
   stop(): Promise<void>
 }
 
-/** Spawn a fully-wired daemon backed by a fresh tmp state root. */
+/** Spawn a fully-wired daemon backed by a fresh tmp state root. The
+ *  sockets are real (a real Bun.listen on disk), but storage is
+ *  `:memory:`. Empirically the on-disk SQLite open dominated ~60% of
+ *  per-test wall time and the suite has no concurrent-reader/writer
+ *  assertions that require WAL-on-disk behavior. */
 export function spawnTestDaemon(opts?: { nowIso?: () => string }): TestDaemon {
   const stateRoot = mkdtempSync(join(tmpdir(), 'choros-test-'))
   const socketPath = join(stateRoot, 'daemon.sock')
   const adminSocketPath = join(stateRoot, 'admin.sock')
-  const storage = openStorage(join(stateRoot, 'choros.sqlite'))
+  const storage = openStorage(':memory:')
   const router = new SessionRouter()
   const ctx: HandlerCtx = {
     storage,

@@ -3,14 +3,16 @@ import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { NIL_UUID, UUID_RE } from '#choros/identity.ts'
 import { ERR_INVALID_PARAMS, ERR_NOT_FOUND, type RpcError } from '#choros/protocol/methods.ts'
 
-/** Escape SQL LIKE meta-characters so caller input can't smuggle
+/** Escape GLOB meta-characters so caller input can't smuggle
  *  wildcards into the prefix-match branch of `resolveRecipient`.
- *  Without this, target=`%` would match any session, and `_` would
- *  match any single character — letting a peer probe the session
- *  space via ambiguity errors. Paired with `ESCAPE '\'` on the
- *  query. */
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, '\\$&')
+ *  Without this, target=`*`/`?`/`[…]` would broaden the match. We
+ *  use GLOB (case-sensitive, range-bounded by SQLite for a literal
+ *  prefix) instead of LIKE: SQLite's default `LIKE` is
+ *  case-insensitive, which defeats the PRIMARY KEY index for prefix
+ *  matching and forces a full scan. GLOB with a literal prefix
+ *  resolves to an index range search. */
+function escapeGlob(s: string): string {
+  return s.replace(/[*?[\]]/g, '[$&]')
 }
 
 /** Generic "args object" coercion used by every handler. */
@@ -168,13 +170,14 @@ export function resolveRecipient(
     )
     .get(target) as { id: string; display_name: string | null } | null
   if (byName) return byName
-  // UUID prefix match (must be unambiguous). Escape LIKE meta-chars
-  // so target `%` or `_` can't broaden the match to "everything" or
-  // "any single char." Without escaping, a peer could probe the
-  // session space via the ambiguity error.
+  // UUID prefix match (must be unambiguous). Use GLOB rather than
+  // LIKE so SQLite reduces the prefix query to an index range scan;
+  // default LIKE is case-insensitive and forces a full table scan
+  // even with the PK index available. Escape GLOB meta-chars so a
+  // caller can't smuggle `*` / `?` / `[…]` to broaden the match.
   const prefix = ctx.storage.db
-    .query("SELECT id, display_name FROM sessions WHERE id LIKE ? ESCAPE '\\' LIMIT 2")
-    .all(`${escapeLike(target)}%`) as { id: string; display_name: string | null }[]
+    .query('SELECT id, display_name FROM sessions WHERE id GLOB ? LIMIT 2')
+    .all(`${escapeGlob(target)}*`) as { id: string; display_name: string | null }[]
   if (prefix.length === 1 && prefix[0]) return prefix[0]
   if (prefix.length > 1) {
     return {

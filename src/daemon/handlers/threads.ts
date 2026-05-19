@@ -22,6 +22,13 @@ function requireThreadId(raw: string, label: string): string | RpcError {
   }
 }
 
+/** Most-recent N messages returned to a freshly-joining session. A
+ *  thread with 10k+ messages would otherwise ship a multi-MB backlog
+ *  frame on every join + a synchronous mcp.notification replay on
+ *  the shim. Older history stays in the table; the client can
+ *  paginate via a follow-up query if needed. */
+const BACKLOG_LIMIT = 100
+
 export interface JoinThreadResult {
   thread_id: string
   members: string[]
@@ -75,16 +82,22 @@ export function handleJoinThread(ctx: HandlerCtx, rawArgs: unknown): JoinThreadR
   // per-recipient inbox). The backlog query collapses those back into
   // one row per logical message — without this dedupe, a joiner would
   // see N-1 copies of every prior message where N is the historical
-  // member count when it was sent.
+  // member count when it was sent. Bounded to the most-recent
+  // BACKLOG_LIMIT entries so an ancient thread doesn't ship megabytes
+  // of history through every fresh joiner's first response.
   const backlog = (
     ctx.storage.db
       .query(
-        `SELECT MIN(id) AS id, from_session, body, ts, in_reply_to FROM messages
-         WHERE thread_id = ?
-         GROUP BY from_session, ts, body, COALESCE(in_reply_to, '')
-         ORDER BY ts ASC`,
+        `SELECT id, from_session, body, ts, in_reply_to FROM (
+           SELECT MIN(id) AS id, from_session, body, ts, in_reply_to
+           FROM messages
+           WHERE thread_id = ?
+           GROUP BY from_session, ts, body, COALESCE(in_reply_to, '')
+           ORDER BY ts DESC
+           LIMIT ?
+         ) ORDER BY ts ASC`,
       )
-      .all(thread_id) as {
+      .all(thread_id, BACKLOG_LIMIT) as {
       id: string
       from_session: string
       body: string
