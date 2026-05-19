@@ -18,6 +18,12 @@ export function asObject(args: unknown, label: string): Record<string, unknown> 
  *  pick tighter caps where appropriate (display_name, emoji, topic). */
 export const DEFAULT_STRING_MAX = 8 * 1024
 
+/** Display-name cap. Applied byte-wise so an emoji-heavy name doesn't
+ *  bypass it via the JS char-length asymmetry. 256 bytes is enough
+ *  for any practical session label and matches what the channel meta
+ *  surface comfortably renders. */
+export const DISPLAY_NAME_MAX_BYTES = 256
+
 /** Require a non-empty string field. Enforces a byte-length cap via
  *  `maxBytes` (default {@link DEFAULT_STRING_MAX}) so a malicious or
  *  buggy shim cannot ship multi-MB strings into row columns. */
@@ -122,7 +128,25 @@ export function resolveRecipient(
     // on first register.
     return { id: target, display_name: null }
   }
-  // Display-name match. Prefer the most-recent heartbeat.
+  // Display-name match. Two live sessions sharing the same display
+  // name is ambiguous — silently routing to whichever heartbeated
+  // most recently would cause traffic to oscillate between them and
+  // contradicts the UUID-prefix branch below, which rejects ambiguity.
+  // Only fall back to "most recent" when no live session matches.
+  const liveByName = ctx.storage.db
+    .query(
+      `SELECT id, display_name FROM sessions
+       WHERE display_name = ? AND lock_pid IS NOT NULL
+       ORDER BY heartbeat_at DESC NULLS LAST LIMIT 2`,
+    )
+    .all(target) as { id: string; display_name: string | null }[]
+  if (liveByName.length === 1 && liveByName[0]) return liveByName[0]
+  if (liveByName.length > 1) {
+    return {
+      code: ERR_INVALID_PARAMS,
+      message: `ambiguous recipient "${target}" — multiple live sessions share this display name`,
+    }
+  }
   const byName = ctx.storage.db
     .query(
       `SELECT id, display_name FROM sessions

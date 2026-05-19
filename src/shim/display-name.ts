@@ -2,16 +2,19 @@ import { open, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { encodedCwd, UUID_RE } from '#choros/identity.ts'
 
-/** Per-shim cache of the most-recently-resolved JSONL mtime + value.
+/** Per-shim cache of the most-recently-resolved JSONL state + value.
  *  The shim polls `/rename` every heartbeat (30s); 99% of polls find
- *  no change. Skip the full tail-read when the file's mtime hasn't
- *  advanced since the last resolution. */
-interface MtimeCache {
+ *  no change. Skip the full tail-read when the file hasn't advanced.
+ *  We key on both mtime AND size because mtime is a millisecond-
+ *  precision float — same-ms writes appear identical. Size catches
+ *  any write that landed in the same ms. */
+interface FsCache {
   jsonl: string
   mtimeMs: number
+  size: number
   value: string | null
 }
-let cache: MtimeCache | null = null
+let cache: FsCache | null = null
 
 /** Tail-window size for the JSONL scan. CC writes title events as the
  *  session lives; the most recent ones sit at the file's tail, so a
@@ -36,16 +39,19 @@ export async function resolveDisplayName(opts: {
 }): Promise<string | null> {
   const jsonl = await findJsonl(opts)
   if (!jsonl) return null
-  // mtime check first — heartbeat polls this every 30s; the JSONL
-  // rarely advances between polls so a stat() + cache hit is cheaper
-  // than re-reading the 64 KB tail.
+  // mtime+size check first — heartbeat polls this every 30s; the
+  // JSONL rarely advances between polls so a stat() + cache hit is
+  // cheaper than re-reading the 64 KB tail.
   let mtimeMs: number
+  let size: number
   try {
-    mtimeMs = (await stat(jsonl)).mtimeMs
+    const st = await stat(jsonl)
+    mtimeMs = st.mtimeMs
+    size = st.size
   } catch {
     return null
   }
-  if (cache && cache.jsonl === jsonl && cache.mtimeMs === mtimeMs) {
+  if (cache && cache.jsonl === jsonl && cache.mtimeMs === mtimeMs && cache.size === size) {
     return cache.value
   }
   let chunk: string
@@ -85,7 +91,7 @@ export async function resolveDisplayName(opts: {
     }
   }
   const value = result ?? aiFallback
-  cache = { jsonl, mtimeMs, value }
+  cache = { jsonl, mtimeMs, size, value }
   return value
 }
 

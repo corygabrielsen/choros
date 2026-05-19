@@ -1,3 +1,4 @@
+import { DISPLAY_NAME_MAX_BYTES } from '#choros/daemon/helpers.ts'
 import type { NotificationSink, SessionRouter } from '#choros/daemon/sessions.ts'
 import type { Storage } from '#choros/daemon/storage.ts'
 import { drainPendingNotifications, upsertSession } from '#choros/daemon/storage.ts'
@@ -37,6 +38,15 @@ function validateRegisterArgs(args: unknown): RpcError | RegisterArgs {
   }
   if (a.display_name !== null && typeof a.display_name !== 'string') {
     return { code: ERR_INVALID_PARAMS, message: 'register: display_name must be string or null' }
+  }
+  if (
+    typeof a.display_name === 'string' &&
+    Buffer.byteLength(a.display_name, 'utf8') > DISPLAY_NAME_MAX_BYTES
+  ) {
+    return {
+      code: ERR_INVALID_PARAMS,
+      message: `register: display_name exceeds ${DISPLAY_NAME_MAX_BYTES} bytes`,
+    }
   }
   if (typeof a.host !== 'string') {
     return { code: ERR_INVALID_PARAMS, message: 'register: host must be a string' }

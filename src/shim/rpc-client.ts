@@ -48,8 +48,10 @@ export async function connectRpcClient(opts: {
   socketPath: string
   onNotification: NotificationHandler
   /** Called once each time the socket reconnects (initial connect
-   *  counts as one). Useful for re-registering the session. */
-  onConnect?: () => void | Promise<void>
+   *  counts as one). Receives the client so the callback can issue
+   *  the register handshake without capturing an outer `const rpc`
+   *  binding that's still in its TDZ on the first call. */
+  onConnect?: (client: RpcClient) => void | Promise<void>
 }): Promise<RpcClient> {
   let buf = ''
   let idCounter = 0
@@ -118,10 +120,10 @@ export async function connectRpcClient(opts: {
       reconnectTimer = null
       if (closed) return
       void open()
-        .then(async () => {
-          // Successful reconnect resets the backoff for the next outage.
+        .then(() => {
+          // Successful reconnect resets the backoff. onConnect already
+          // fires from inside open() — don't call it twice here.
           reconnectDelay = RECONNECT_INITIAL_MS
-          if (opts.onConnect) await opts.onConnect()
         })
         .catch(err => {
           process.stderr.write(
@@ -156,12 +158,14 @@ export async function connectRpcClient(opts: {
         },
       },
     })
-    if (opts.onConnect) await opts.onConnect()
+    if (opts.onConnect) await opts.onConnect(client)
   }
 
-  await open()
-
-  return {
+  // `client` is referenced inside `open()` (via the onConnect call).
+  // Declared after `open` so the closure captures the binding; the
+  // initial `open()` call below happens after this assignment so the
+  // const is initialized by the time onConnect runs.
+  const client: RpcClient = {
     call<R>(method: string, params?: unknown): Promise<R> {
       if (closed) return Promise.reject(new Error('rpc: client closed'))
       if (!socket) return Promise.reject(new Error('rpc: not connected'))
@@ -214,4 +218,7 @@ export async function connectRpcClient(opts: {
       return socket !== null
     },
   }
+
+  await open()
+  return client
 }

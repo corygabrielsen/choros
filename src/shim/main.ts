@@ -23,6 +23,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { realContext } from '#choros/effects.ts'
 import { resolveIdentity } from '#choros/identity.ts'
 import {
+  ERR_PROTOCOL_MISMATCH,
   ERR_UNKNOWN_SESSION,
   PROTOCOL_VERSION,
   type RegisterResult,
@@ -130,10 +131,10 @@ const rpc = await connectRpcClient({
   onNotification: (method, params) => {
     void emitDaemonNotification(method, params)
   },
-  onConnect: async () => {
+  onConnect: async (client): Promise<void> => {
     try {
       cachedDisplayName = await currentDisplayName()
-      const result = await rpc.call<RegisterResult>('choros.register', {
+      const result = await client.call<RegisterResult>('choros.register', {
         protocol_version: PROTOCOL_VERSION,
         session_id: ME,
         display_name: cachedDisplayName,
@@ -150,6 +151,15 @@ const rpc = await connectRpcClient({
       )
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e)
+      // A protocol-version mismatch can't be recovered by reconnecting
+      // — the daemon's contract is incompatible with this shim binary.
+      // Bail hard so the wrapper can surface "reinstall shim" instead
+      // of looping forever pretending to be connected.
+      if (m.includes(String(ERR_PROTOCOL_MISMATCH)) || m.includes('protocol mismatch')) {
+        ctx.proc.stderr(`[choros-shim] ${m} — exiting; reinstall the matching shim\n`)
+        ctx.proc.exit(2)
+        return
+      }
       ctx.proc.stderr(`[choros-shim] register failed: ${m}\n`)
     }
   },
