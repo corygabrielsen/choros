@@ -110,18 +110,34 @@ export async function recipientLiveness(
     return { status: 'stale', age_ms: heartbeatAgeMs, last_agent_turn_age_ms: lastAgentTurnAgeMs }
   }
   if (heartbeatAgeMs <= LIVE_MAX_AGE_MS) {
+    const wedgePath = join(stateRoot, recipientId, '.wedged')
+    let wedgeRaw: string | null = null
     try {
-      const wedgeRaw = await ctx.fs.readFile(join(stateRoot, recipientId, '.wedged'))
-      const wedge = JSON.parse(wedgeRaw) as { detected_at?: string; pending_msg_ids?: string[] }
-      return {
-        status: 'wedged',
-        age_ms: heartbeatAgeMs,
-        last_agent_turn_age_ms: lastAgentTurnAgeMs,
-        wedge_detected_at: wedge.detected_at,
-        wedge_pending_msg_ids: wedge.pending_msg_ids,
-      }
+      wedgeRaw = await ctx.fs.readFile(wedgePath)
     } catch {
-      /* not wedged */
+      // .wedged absent → live
+    }
+    if (wedgeRaw !== null) {
+      try {
+        const wedge = JSON.parse(wedgeRaw) as { detected_at?: string; pending_msg_ids?: string[] }
+        return {
+          status: 'wedged',
+          age_ms: heartbeatAgeMs,
+          last_agent_turn_age_ms: lastAgentTurnAgeMs,
+          wedge_detected_at: wedge.detected_at,
+          wedge_pending_msg_ids: wedge.pending_msg_ids,
+        }
+      } catch {
+        // Marker present but unparseable. Surface as wedged anyway —
+        // the existence of the file is the signal; parse failure means
+        // the writer was interrupted mid-rename and we should treat
+        // peer as wedged-but-details-unknown rather than silently live.
+        return {
+          status: 'wedged',
+          age_ms: heartbeatAgeMs,
+          last_agent_turn_age_ms: lastAgentTurnAgeMs,
+        }
+      }
     }
     return { status: 'live', age_ms: heartbeatAgeMs, last_agent_turn_age_ms: lastAgentTurnAgeMs }
   }

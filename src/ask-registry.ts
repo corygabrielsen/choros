@@ -20,13 +20,24 @@ export class AskRegistry {
 
   /** If a waiter is registered for msg.in_reply_to, resolve it and return
    *  true. The caller can decide whether to suppress the normal channel
-   *  push (we don't — agents may want to see the reply event anyway). */
+   *  push (we don't — agents may want to see the reply event anyway).
+   *
+   *  The callback is wrapped in try/catch so a throwing waiter cannot
+   *  unwind back into the inbox emit pipeline (which would leave subsequent
+   *  inbox messages unprocessed). The waiter is unregistered BEFORE
+   *  invocation so even a throwing callback doesn't leak a stale entry. */
   notifyIfWaiting(msg: InboxMessage): boolean {
     if (!msg.in_reply_to) return false
     const cb = this.waiters.get(msg.in_reply_to)
     if (!cb) return false
     this.waiters.delete(msg.in_reply_to)
-    cb(msg)
+    try {
+      cb(msg)
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e)
+      // biome-ignore lint/suspicious/noConsole: registry has no ctx.proc handle; this is the failsafe path
+      console.error(`[choros] ask waiter for ${msg.in_reply_to} threw: ${m}`)
+    }
     return true
   }
 

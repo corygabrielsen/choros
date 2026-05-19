@@ -208,7 +208,17 @@ async function emitInboxMessageInner(
     verified_at: ctx.clock.nowIso(),
     pid: ctx.proc.pid(),
   })
-  await ctx.fs.writeFile(sidecar, marker)
+  try {
+    await ctx.fs.writeFile(sidecar, marker)
+  } catch (e: unknown) {
+    // If we can't write .seen, the next sweep will re-emit the message.
+    // Surface the failure so it's visible — otherwise an unwritable inbox
+    // dir would loop silently. The msg push already happened, so the
+    // recipient saw it; only the sender's verify_path stat lies until
+    // the underlying fs problem is resolved.
+    const m = e instanceof Error ? e.message : String(e)
+    ctx.proc.stderr(`[choros] .seen sidecar write failed for ${sidecar}: ${m}\n`)
+  }
   try {
     await writeAckToSender(
       ctx,

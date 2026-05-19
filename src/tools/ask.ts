@@ -29,8 +29,17 @@ export async function handleAsk(
   const body = args.body ?? ''
   if (!to) throw new Error('ask: "to" is required')
   if (!body) throw new Error('ask: "body" is required')
-  const timeoutMs =
-    args.timeout_ms === undefined ? DEFAULT_ASK_TIMEOUT_MS : Math.max(1, args.timeout_ms)
+  let timeoutMs = DEFAULT_ASK_TIMEOUT_MS
+  if (args.timeout_ms !== undefined) {
+    if (
+      typeof args.timeout_ms !== 'number' ||
+      !Number.isFinite(args.timeout_ms) ||
+      args.timeout_ms <= 0
+    ) {
+      throw new Error('ask: "timeout_ms" must be a positive finite number')
+    }
+    timeoutMs = args.timeout_ms
+  }
 
   const sent = await handleSend(ctx, targets, { to, body, act: 'QUESTION' })
 

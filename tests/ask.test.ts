@@ -100,6 +100,26 @@ describe('handleAsk', () => {
     await expect(handleAsk(ctx, targets, reg, { to: 'peer' })).rejects.toThrow(/body/)
   })
 
+  test('rejects non-positive or non-numeric timeout_ms', async () => {
+    const ctx = fakeContext()
+    const reg = new AskRegistry()
+    await expect(
+      handleAsk(ctx, targets, reg, { to: 'peer', body: 'x', timeout_ms: 0 }),
+    ).rejects.toThrow(/positive/)
+    await expect(
+      handleAsk(ctx, targets, reg, { to: 'peer', body: 'x', timeout_ms: -1 }),
+    ).rejects.toThrow(/positive/)
+  })
+
+  test('callback throw does not unwind notifyIfWaiting', async () => {
+    const reg = new AskRegistry()
+    reg.register('q', () => {
+      throw new Error('boom')
+    })
+    expect(reg.notifyIfWaiting({ id: 'r', in_reply_to: 'q', body: '' })).toBe(true)
+    expect(reg.pendingCount()).toBe(0)
+  })
+
   test('refuses asking self', async () => {
     const ctx = fakeContext()
     const reg = new AskRegistry()

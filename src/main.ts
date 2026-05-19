@@ -26,7 +26,7 @@ import {
   handleSendToThread,
 } from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.22.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.23.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -266,13 +266,12 @@ const heartbeatInterval = setInterval(() => {
 
 await server.connect(new StdioServerTransport())
 
-const presenceTargets = {
-  stateRoot: STATE_ROOT,
-  projectsRoot: PROJECTS_ROOT,
-  me: ME,
-  myName,
-}
-const helloPeers = await broadcastPresence(ctx, presenceTargets, 'hello')
+// Recomputed at each use so the freshest myName flows into the broadcast.
+const helloPeers = await broadcastPresence(
+  ctx,
+  { stateRoot: STATE_ROOT, projectsRoot: PROJECTS_ROOT, me: ME, myName },
+  'hello',
+)
 await emitBootRoster(ctx, { wedgePath: WEDGE_PATH, peers: helloPeers })
 
 const inboxWatcher = ctx.spawner.spawn('inotifywait', [
@@ -322,23 +321,46 @@ presenceWatcher.onStdout(chunk => {
 })
 
 const watchers = [inboxWatcher, presenceWatcher]
-function shutdown(): void {
+let shuttingDown = false
+
+// Synchronous part of shutdown — safe to call from process 'exit' handler
+// where async work cannot complete. Stops the heartbeat tick and kills
+// inotify children so they don't outlive us.
+function shutdownSync(): void {
+  if (shuttingDown) return
+  shuttingDown = true
   clearInterval(heartbeatInterval)
   for (const w of watchers) w.kill()
-  void broadcastPresence(ctx, presenceTargets, 'goodbye').catch(() => undefined)
 }
-process.on('exit', shutdown)
+
+// Async shutdown — runs on SIGINT/SIGTERM where we still have the event loop.
+// Broadcasts a goodbye to live peers with a hard deadline so a wedged peer
+// doesn't block us indefinitely. Recomputes targets so the freshest myName
+// is broadcast (the heartbeat tick may have updated it since boot).
+async function shutdownAsync(): Promise<void> {
+  shutdownSync()
+  try {
+    const targets = { stateRoot: STATE_ROOT, projectsRoot: PROJECTS_ROOT, me: ME, myName }
+    await Promise.race([
+      broadcastPresence(ctx, targets, 'goodbye'),
+      new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+    ])
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    ctx.proc.stderr(`[choros] goodbye broadcast failed: ${m}\n`)
+  }
+}
+
+process.on('exit', shutdownSync)
 process.on('SIGINT', () => {
-  shutdown()
-  ctx.proc.exit(0)
+  void shutdownAsync().finally(() => ctx.proc.exit(0))
 })
 process.on('SIGTERM', () => {
-  shutdown()
-  ctx.proc.exit(0)
+  void shutdownAsync().finally(() => ctx.proc.exit(0))
 })
 
 ctx.proc.stderr(
-  `[choros] v0.22 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.23 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )
