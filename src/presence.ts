@@ -201,21 +201,27 @@ export async function emitPresence(
     }
     return 'self'
   }
-  const peerLabel = data.peer_name || data.peer_id?.slice(0, 8) || 'unknown'
+  // Filter every meta-bound field to string-only — non-string `toString`
+  // would otherwise run during `String(...)` coercion and could pollute
+  // the meta with `"[object Object]"` or attacker-defined output.
+  const safeStr = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const peerLabel = safeStr(data.peer_name) || safeStr(data.peer_id).slice(0, 8) || 'unknown'
   const meta: Record<string, string> = {
     source: 'choros-presence',
-    event: String(data.event ?? ''),
-    peer_id: String(data.peer_id ?? ''),
-    peer_name: String(data.peer_name ?? ''),
+    event: safeStr(data.event),
+    peer_id: safeStr(data.peer_id),
+    peer_name: safeStr(data.peer_name),
   }
-  if (data.old_name) meta.old_name = data.old_name
-  if (data.new_name) meta.new_name = data.new_name
+  const oldName = safeStr(data.old_name)
+  const newName = safeStr(data.new_name)
+  if (oldName) meta.old_name = oldName
+  if (newName) meta.new_name = newName
   let content: string
   if (data.event === 'join') content = `Peer ${peerLabel} came online`
   else if (data.event === 'leave') content = `Peer ${peerLabel} went offline`
   else if (data.event === 'rename') {
-    content = `Peer ${data.old_name ?? '?'} renamed to ${data.new_name ?? '?'}`
-  } else content = `Peer ${peerLabel} presence event: ${data.event}`
+    content = `Peer ${oldName || '?'} renamed to ${newName || '?'}`
+  } else content = `Peer ${peerLabel} presence event: ${safeStr(data.event)}`
   const result = await withTimeout(
     ctx,
     ctx.mcp.notify('notifications/claude/channel', { content, meta }),

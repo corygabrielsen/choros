@@ -108,24 +108,49 @@ export interface InboxMessage {
   act?: SpeechAct
 }
 
-/** Read a single inbox `.json`. Returns null on missing or unparseable. */
+/** Hard cap on `.json` file size we'll deserialize into a message. The
+ *  body cap is 64 KB plus per-field overhead; this is a generous bound
+ *  that lets normal messages through while rejecting blobs that would
+ *  pump multi-MB content through the channel push. */
+export const INBOUND_MESSAGE_CAP_BYTES = 256 * 1024
+
+/** Read a single inbox `.json`. Returns null on missing, unparseable, or
+ *  over-cap. The cap is enforced at the file-size level (via stat)
+ *  before reading, so we never load attacker-controlled gigabytes. */
 export async function readInboxMessage(
   ctx: Pick<Context, 'fs' | 'proc'>,
   filePath: string,
 ): Promise<InboxMessage | null> {
+  try {
+    const s = await ctx.fs.stat(filePath)
+    if (s.size > INBOUND_MESSAGE_CAP_BYTES) {
+      ctx.proc.stderr(
+        `[choros] ${filePath}: ${s.size}B exceeds inbound cap (${INBOUND_MESSAGE_CAP_BYTES}B); skipping\n`,
+      )
+      return null
+    }
+  } catch {
+    return null
+  }
   let raw: string
   try {
     raw = await ctx.fs.readFile(filePath)
   } catch {
     return null
   }
+  let data: InboxMessage
   try {
-    return JSON.parse(raw) as InboxMessage
+    data = JSON.parse(raw) as InboxMessage
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e)
     ctx.proc.stderr(`[choros] failed to parse ${filePath}: ${m}\n`)
     return null
   }
+  if (typeof data.body === 'string' && Buffer.byteLength(data.body, 'utf8') > BODY_CAP_BYTES) {
+    ctx.proc.stderr(`[choros] ${filePath}: body exceeds ${BODY_CAP_BYTES}B; skipping\n`)
+    return null
+  }
+  return data
 }
 
 /** Outcome of an {@link emitInboxMessage} call.
@@ -188,6 +213,13 @@ function safeString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined
 }
 
+/** Maximum mention-list size carried in channel meta. A mention-bomb
+ *  inbound msg would otherwise pump a multi-MB meta string through the
+ *  push and could execute attacker-defined `toString` on non-string
+ *  array items. Truncation keeps the diagnostic value (first N peers)
+ *  without unbounded growth. */
+const MAX_MENTIONS_IN_META = 64
+
 function buildInboxMeta(
   data: InboxMessage,
   me: string,
@@ -212,9 +244,18 @@ function buildInboxMeta(
   if (data.broadcast) meta.broadcast = 'true'
   if (data.act) meta.act = data.act
   if (Array.isArray(data.mentions) && data.mentions.length > 0) {
-    const mentionedMe = data.mentions.some(m => m === me || (typeof m === 'string' && m === myName))
+    // Filter to strings only — attacker-controllable array could contain
+    // non-string items whose `toString` runs at .join time. Then cap so
+    // a mention-bomb (10000 entries) cannot pump a multi-MB meta blob
+    // through the push.
+    const stringMentions = data.mentions.filter((m): m is string => typeof m === 'string')
+    const mentionedMe = stringMentions.some(m => m === me || m === myName)
     if (mentionedMe) meta.mentioned_me = 'true'
-    meta.mentions = data.mentions.join(',')
+    const capped = stringMentions.slice(0, MAX_MENTIONS_IN_META)
+    if (capped.length > 0) meta.mentions = capped.join(',')
+    if (stringMentions.length > MAX_MENTIONS_IN_META) {
+      meta.mentions_truncated = String(stringMentions.length - MAX_MENTIONS_IN_META)
+    }
   }
   return meta
 }
