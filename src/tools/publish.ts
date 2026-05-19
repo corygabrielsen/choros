@@ -70,11 +70,13 @@ export async function handlePublish(
   }
   await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase, null, 2))
-  for (const subId of subscribers) {
-    const payload = JSON.stringify({ ...msgBase, to_session: subId }, null, 2)
-    const inboxDir = join(targets.stateRoot, subId, 'inbox')
-    await ctx.fs.mkdir(inboxDir, { recursive: true })
-    await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
-  }
+  await Promise.all(
+    subscribers.map(async subId => {
+      const payload = JSON.stringify({ ...msgBase, to_session: subId }, null, 2)
+      const inboxDir = join(targets.stateRoot, subId, 'inbox')
+      await ctx.fs.mkdir(inboxDir, { recursive: true })
+      await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
+    }),
+  )
   return { msg_id: id, topic, delivered_to: subscribers }
 }

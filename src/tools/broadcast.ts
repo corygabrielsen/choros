@@ -64,11 +64,13 @@ export async function handleBroadcast(
   }
   await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase, null, 2))
-  for (const r of recipients) {
-    const payload = JSON.stringify({ ...msgBase, to_session: r.id, to_name: r.name }, null, 2)
-    const inboxDir = join(targets.stateRoot, r.id, 'inbox')
-    await ctx.fs.mkdir(inboxDir, { recursive: true })
-    await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
-  }
+  await Promise.all(
+    recipients.map(async r => {
+      const payload = JSON.stringify({ ...msgBase, to_session: r.id, to_name: r.name }, null, 2)
+      const inboxDir = join(targets.stateRoot, r.id, 'inbox')
+      await ctx.fs.mkdir(inboxDir, { recursive: true })
+      await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
+    }),
+  )
   return { msg_id: id, recipients: recipients.map(r => r.id) }
 }

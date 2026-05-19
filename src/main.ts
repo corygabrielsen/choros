@@ -7,7 +7,7 @@ import { AskRegistry } from './ask-registry.ts'
 import type { WedgeState } from './delivery.ts'
 import { type Context, type Mcp, realContext } from './effects.ts'
 import { HEARTBEAT_INTERVAL_MS, buildHeartbeat, writeHeartbeat } from './heartbeat.ts'
-import { resolveIdentity, resolveMyName } from './identity.ts'
+import { createNameCache, resolveIdentity, resolveMyNameCached } from './identity.ts'
 import { emitInboxMessage } from './inbox.ts'
 import { broadcastPresence, broadcastRename, emitBootRoster, emitPresence } from './presence.ts'
 import { projectsRoot, resolveStateRoot } from './state-root.ts'
@@ -26,7 +26,7 @@ import {
   handleSendToThread,
 } from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.23.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.24.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -94,7 +94,8 @@ const wedge: WedgeState = { consecutiveTimeouts: 0 }
 const droppedAcksEmitted = new Set<string>()
 const inFlightEmits = new Set<string>()
 const askRegistry = new AskRegistry()
-let myName = await resolveMyName(ctx, identity, PROJECTS_ROOT)
+const nameCache = createNameCache()
+let myName = await resolveMyNameCached(ctx, identity, PROJECTS_ROOT, nameCache)
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -264,7 +265,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
 
 async function tickHeartbeat(): Promise<void> {
   const previousName = myName
-  myName = await resolveMyName(ctx, identity, PROJECTS_ROOT)
+  myName = await resolveMyNameCached(ctx, identity, PROJECTS_ROOT, nameCache)
   const hb = buildHeartbeat(ctx, {})
   try {
     await writeHeartbeat(ctx, HEARTBEAT_PATH, hb)
@@ -387,7 +388,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.23 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.24 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )

@@ -99,33 +99,54 @@ export async function findJsonlForSession(
 }
 
 /** Read the latest custom-title (preferred) or ai-title from a JSONL.
- *  Returns null if no titled events exist or the file is unreadable. */
+ *
+ *  We want the MOST RECENT title event — read the file then walk lines
+ *  in reverse, returning on the first match. Walking forward would scan
+ *  the entire (multi-MB) file every call; reverse + early-exit means we
+ *  typically read only the last few KB.
+ *
+ *  The forward scan was a hot path for resolveMyName (every heartbeat
+ *  tick + every tool handler) and listKnownInstances (every doctor /
+ *  publish / broadcast). At 5MB JSONL × 5 peers × 1 doctor call =
+ *  25MB of file I/O per doctor — backwards-scan-with-early-exit cuts
+ *  that to ~5-50KB. */
 export async function readDisplayNameForJsonl(
   ctx: Pick<Context, 'fs'>,
   jsonl: string | null,
 ): Promise<string | null> {
   if (!jsonl) return null
-  let customTitle: string | null = null
-  let aiTitle: string | null = null
+  // Collect lines into an array so we can walk in reverse. The full read
+  // is still bounded by the file size, but the parse cost (which dominates
+  // when there are many matching lines) drops to one parse on the typical
+  // case (the latest custom-title appears at the end of the file).
+  const lines: string[] = []
   try {
     for await (const line of ctx.fs.readLines(jsonl)) {
-      if (!line) continue
-      if (!line.includes('"custom-title"') && !line.includes('"ai-title"')) continue
-      try {
-        const ev = JSON.parse(line)
-        if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {
-          customTitle = ev.customTitle
-        } else if (ev?.type === 'ai-title' && typeof ev.aiTitle === 'string') {
-          aiTitle = ev.aiTitle
-        }
-      } catch {
-        /* skip unparseable line */
-      }
+      lines.push(line)
     }
   } catch {
-    /* JSONL missing or unreadable */
+    return null
   }
-  return customTitle || aiTitle
+  // Walk backwards. Return the first custom-title we find. If we exhaust
+  // without finding one, fall back to the first ai-title from the back.
+  let aiTitleFallback: string | null = null
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    if (!line) continue
+    if (!line.includes('"custom-title"') && !line.includes('"ai-title"')) continue
+    try {
+      const ev = JSON.parse(line)
+      if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {
+        return ev.customTitle
+      }
+      if (aiTitleFallback === null && ev?.type === 'ai-title' && typeof ev.aiTitle === 'string') {
+        aiTitleFallback = ev.aiTitle
+      }
+    } catch {
+      /* skip unparseable line */
+    }
+  }
+  return aiTitleFallback
 }
 
 export async function resolveMyName(
@@ -136,6 +157,57 @@ export async function resolveMyName(
   if (!identity.meIsUuid) return identity.me
   const jsonl = await findJsonlForSession(ctx, projectsRoot, identity.me)
   return (await readDisplayNameForJsonl(ctx, jsonl)) || `${identity.me.slice(0, 8)}…`
+}
+
+/** Cached resolveMyName for hot paths (heartbeat tick, tool handlers).
+ *  Invalidates when the underlying JSONL's mtime changes — that's the
+ *  only mutation channel for display name (the agent's /rename writes
+ *  a custom-title event into the JSONL, which bumps the file mtime). */
+export interface NameCache {
+  /** Cached name. */
+  value: string | null
+  /** mtime of the JSONL at the time of cache. */
+  mtimeMs: number
+  /** Cached JSONL path (so we don't re-search for it). */
+  jsonlPath: string | null
+}
+
+export function createNameCache(): NameCache {
+  return { value: null, mtimeMs: 0, jsonlPath: null }
+}
+
+export async function resolveMyNameCached(
+  ctx: Pick<Context, 'fs' | 'env' | 'proc' | 'clock'>,
+  identity: Identity,
+  projectsRoot: string,
+  cache: NameCache,
+): Promise<string> {
+  if (!identity.meIsUuid) return identity.me
+  // Locate the JSONL (cached path on hot path; re-discover on first call
+  // or if the previous lookup failed).
+  let jsonl = cache.jsonlPath
+  if (jsonl === null) {
+    jsonl = await findJsonlForSession(ctx, projectsRoot, identity.me)
+    cache.jsonlPath = jsonl
+  }
+  if (!jsonl) {
+    return cache.value ?? `${identity.me.slice(0, 8)}…`
+  }
+  // mtime-based invalidation. If the JSONL hasn't changed since the last
+  // cached value, return the cache. Else re-scan.
+  let currentMtime = 0
+  try {
+    currentMtime = (await ctx.fs.stat(jsonl)).mtimeMs
+  } catch {
+    return cache.value ?? `${identity.me.slice(0, 8)}…`
+  }
+  if (cache.value !== null && currentMtime === cache.mtimeMs) {
+    return cache.value
+  }
+  const name = (await readDisplayNameForJsonl(ctx, jsonl)) || `${identity.me.slice(0, 8)}…`
+  cache.value = name
+  cache.mtimeMs = currentMtime
+  return name
 }
 
 /** Three-layer self-exclusion. Each layer is independent; the function

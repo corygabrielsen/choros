@@ -48,41 +48,45 @@ export async function handleDoctor(
   targets: DoctorTargets,
 ): Promise<DoctorReport> {
   const known = await listKnownInstances(ctx, targets.stateRoot, targets.projectsRoot)
-  const peers: DoctorPeer[] = []
-  for (const k of known) {
-    if (k.id === targets.me) continue
-    const dir = join(targets.stateRoot, k.id)
-    let heartbeatAgeMs: number | undefined
-    let peerPid: number | undefined
-    try {
-      const s = await ctx.fs.stat(join(dir, '.heartbeat'))
-      heartbeatAgeMs = ctx.clock.nowMs() - s.mtimeMs
-      const raw = await ctx.fs.readFile(join(dir, '.heartbeat'))
-      const hb = JSON.parse(raw) as { pid?: number }
-      if (typeof hb?.pid === 'number') peerPid = hb.pid
-    } catch {
-      /* no heartbeat or unparseable */
-    }
-    const bunAlive = peerPid !== undefined && (await ctx.proc.pidAlive(peerPid))
-    const wedged = ctx.fs.existsSync(join(dir, '.wedged'))
-    const lastAgent = await recipientLastAgentTurnAgeMs(ctx, k.id, targets.projectsRoot)
-    const classification = classifyPeerHeartbeat(heartbeatAgeMs, wedged, lastAgent, bunAlive)
-    peers.push({
-      session_id: k.id,
-      display_name: k.name,
-      classification,
-      heartbeat_age_ms: heartbeatAgeMs,
-      last_agent_turn_age_ms: lastAgent,
-      wedged,
-      bun_alive: bunAlive,
-    })
-  }
+  // Probe peers in parallel; each peer's I/O (stat, readFile, pidAlive,
+  // JSONL lookup) is independent of every other's.
+  const probes = await Promise.all(
+    known
+      .filter(k => k.id !== targets.me)
+      .map(async k => {
+        const dir = join(targets.stateRoot, k.id)
+        let heartbeatAgeMs: number | undefined
+        let peerPid: number | undefined
+        try {
+          const s = await ctx.fs.stat(join(dir, '.heartbeat'))
+          heartbeatAgeMs = ctx.clock.nowMs() - s.mtimeMs
+          const raw = await ctx.fs.readFile(join(dir, '.heartbeat'))
+          const hb = JSON.parse(raw) as { pid?: number }
+          if (typeof hb?.pid === 'number') peerPid = hb.pid
+        } catch {
+          /* no heartbeat or unparseable */
+        }
+        const bunAlive = peerPid !== undefined && (await ctx.proc.pidAlive(peerPid))
+        const wedged = ctx.fs.existsSync(join(dir, '.wedged'))
+        const lastAgent = await recipientLastAgentTurnAgeMs(ctx, k.id, targets.projectsRoot)
+        const classification = classifyPeerHeartbeat(heartbeatAgeMs, wedged, lastAgent, bunAlive)
+        return {
+          session_id: k.id,
+          display_name: k.name,
+          classification,
+          heartbeat_age_ms: heartbeatAgeMs,
+          last_agent_turn_age_ms: lastAgent,
+          wedged,
+          bun_alive: bunAlive,
+        } satisfies DoctorPeer
+      }),
+  )
   return {
     self: {
       session_id: targets.me,
       display_name: targets.myName,
       inbox_unread: await countUnreadInbox(ctx, targets.inboxDir),
     },
-    peers,
+    peers: probes,
   }
 }

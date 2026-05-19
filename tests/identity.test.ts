@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import {
   UUID_RE,
+  createNameCache,
   isSelf,
   listKnownInstances,
   parseMentions,
   resolveIdentity,
   resolveMyName,
+  resolveMyNameCached,
   resolveRecipient,
   sanitizeId,
 } from '../src/identity.ts'
@@ -258,5 +260,64 @@ describe('resolveMyName', () => {
       PROJECTS,
     )
     expect(name).toBe('tint')
+  })
+
+  test('cached resolveMyName returns the cached value without rescanning if mtime unchanged', async () => {
+    const ctx = fakeContext()
+    const me = '12345678-1111-2222-3333-444444444444'
+    await ctx.fs.writeFile(
+      `${PROJECTS}/-x/${me}.jsonl`,
+      JSON.stringify({ type: 'custom-title', customTitle: 'cached-name' }),
+    )
+    ctx.env.vars.PWD = '/x'
+    const cache = createNameCache()
+    const id = { me, meIsUuid: true as const, source: 'CLAUDE_CODE_SESSION_ID' as const }
+    expect(await resolveMyNameCached(ctx, id, PROJECTS, cache)).toBe('cached-name')
+    expect(cache.value).toBe('cached-name')
+    // Mutate the file's content but keep mtime the same — cache should
+    // return the old value because mtime hasn't moved.
+    const savedMtime = cache.mtimeMs
+    expect(await resolveMyNameCached(ctx, id, PROJECTS, cache)).toBe('cached-name')
+    expect(cache.mtimeMs).toBe(savedMtime)
+  })
+
+  test('cached resolveMyName invalidates when JSONL mtime advances', async () => {
+    const ctx = fakeContext()
+    const me = '12345678-1111-2222-3333-444444444444'
+    await ctx.fs.writeFile(
+      `${PROJECTS}/-x/${me}.jsonl`,
+      JSON.stringify({ type: 'custom-title', customTitle: 'old' }),
+    )
+    ctx.env.vars.PWD = '/x'
+    const cache = createNameCache()
+    const id = { me, meIsUuid: true as const, source: 'CLAUDE_CODE_SESSION_ID' as const }
+    expect(await resolveMyNameCached(ctx, id, PROJECTS, cache)).toBe('old')
+    // Advance clock then rewrite — mtime moves; cache should refresh.
+    ctx.clock.advance(1000)
+    await ctx.fs.writeFile(
+      `${PROJECTS}/-x/${me}.jsonl`,
+      JSON.stringify({ type: 'custom-title', customTitle: 'new' }),
+    )
+    expect(await resolveMyNameCached(ctx, id, PROJECTS, cache)).toBe('new')
+  })
+
+  test('returns the LATEST custom-title when JSONL has multiple rename events', async () => {
+    const ctx = fakeContext()
+    const me = '12345678-1111-2222-3333-444444444444'
+    const lines = [
+      JSON.stringify({ type: 'custom-title', customTitle: 'old-name' }),
+      JSON.stringify({ type: 'something-else' }),
+      JSON.stringify({ type: 'custom-title', customTitle: 'middle-name' }),
+      JSON.stringify({ type: 'plain-msg' }),
+      JSON.stringify({ type: 'custom-title', customTitle: 'newest-name' }),
+    ].join('\n')
+    await ctx.fs.writeFile(`${PROJECTS}/-x/${me}.jsonl`, `${lines}\n`)
+    ctx.env.vars.PWD = '/x'
+    const name = await resolveMyName(
+      ctx,
+      { me, meIsUuid: true, source: 'CLAUDE_CODE_SESSION_ID' },
+      PROJECTS,
+    )
+    expect(name).toBe('newest-name')
   })
 })

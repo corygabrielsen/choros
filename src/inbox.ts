@@ -12,6 +12,10 @@ import { findJsonlForSession } from './identity.ts'
 
 export const BODY_CAP_BYTES = 64 * 1024
 export const SWEEP_INTERVAL_MS = 60_000
+/** Cap on the dropped-ack dedup Set. Older entries fall off so a long-
+ *  running bun under sustained wedge doesn't grow memory unboundedly.
+ *  We use insertion-order Set semantics; on overflow, drop the oldest. */
+export const DROPPED_ACK_DEDUP_CAP = 1024
 
 /** Speech-act taxonomy. Optional `act` field on every outbound message.
  *  Borrowed from speech-act theory in linguistics — the type of utterance
@@ -187,6 +191,14 @@ async function emitInboxMessageInner(
     )
     if (!emittedDroppedAcks.has(msgId)) {
       emittedDroppedAcks.add(msgId)
+      // Bound the dedup set so a long-running bun under sustained wedge
+      // doesn't grow memory unboundedly. Drop the oldest entry. Worst
+      // case on overflow: a long-dead msg's dropped-ack re-fires once,
+      // which is acceptable noise vs. an unbounded leak.
+      while (emittedDroppedAcks.size > DROPPED_ACK_DEDUP_CAP) {
+        const oldest = emittedDroppedAcks.values().next().value
+        if (oldest !== undefined) emittedDroppedAcks.delete(oldest)
+      }
       try {
         await writeAckToSender(
           ctx,
