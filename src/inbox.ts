@@ -53,8 +53,8 @@ export interface InboxMessage {
   from_host?: string
   from_cwd?: string
   body?: string
-  reply_budget?: number
   in_reply_to?: string
+  thread_id?: string
   topic?: string
   broadcast?: boolean
   mentions?: string[]
@@ -119,8 +119,8 @@ export async function emitInboxMessage(
     from_host: String(data.from_host ?? ''),
     from_cwd: String(data.from_cwd ?? ''),
   }
-  if (data.reply_budget != null) meta.reply_budget = String(data.reply_budget)
   if (data.in_reply_to) meta.in_reply_to = String(data.in_reply_to)
+  if (data.thread_id) meta.thread_id = String(data.thread_id)
   if (data.topic) meta.topic = String(data.topic)
   if (data.broadcast) meta.broadcast = 'true'
   if (data.act) meta.act = data.act
@@ -213,20 +213,4 @@ export function enforceBodyCap(body: string, label: string): void {
   if (bytes > BODY_CAP_BYTES) {
     throw new Error(`${label}: body exceeds ${BODY_CAP_BYTES} bytes (${bytes})`)
   }
-}
-
-/** Reply-budget validation: must be a non-negative integer; replies are
- *  expected to use strictly-smaller budget than the message they reply
- *  to, but the recipient (not the protocol) enforces that descent. */
-export function validateReplyBudget(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined
-  if (
-    typeof value !== 'number' ||
-    !Number.isFinite(value) ||
-    value < 0 ||
-    !Number.isInteger(value)
-  ) {
-    throw new Error('reply_budget must be a non-negative integer')
-  }
-  return value
 }

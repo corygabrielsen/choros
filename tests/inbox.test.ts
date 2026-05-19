@@ -6,7 +6,6 @@ import {
   emitInboxMessage,
   enforceBodyCap,
   readInboxMessage,
-  validateReplyBudget,
   validateSpeechAct,
 } from '../src/inbox.ts'
 import { fakeContext } from './fakes/index.ts'
@@ -82,26 +81,6 @@ describe('validateSpeechAct', () => {
     expect(() => validateSpeechAct(42)).toThrow()
     expect(() => validateSpeechAct({})).toThrow()
     expect(() => validateSpeechAct('question')).toThrow()
-  })
-})
-
-describe('validateReplyBudget', () => {
-  test('accepts undefined and null', () => {
-    expect(validateReplyBudget(undefined)).toBeUndefined()
-    expect(validateReplyBudget(null)).toBeUndefined()
-  })
-
-  test('accepts non-negative integers', () => {
-    expect(validateReplyBudget(0)).toBe(0)
-    expect(validateReplyBudget(5)).toBe(5)
-  })
-
-  test('rejects negatives, fractions, NaN, infinity, strings', () => {
-    expect(() => validateReplyBudget(-1)).toThrow()
-    expect(() => validateReplyBudget(1.5)).toThrow()
-    expect(() => validateReplyBudget(Number.NaN)).toThrow()
-    expect(() => validateReplyBudget(Number.POSITIVE_INFINITY)).toThrow()
-    expect(() => validateReplyBudget('1')).toThrow()
   })
 })
 

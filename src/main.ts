@@ -17,8 +17,14 @@ import { handleReact } from './tools/react.ts'
 import { handleSend } from './tools/send.ts'
 import { handleSetIntent, handleSetStatus } from './tools/set_state.ts'
 import { handleSubscribe, handleUnsubscribe } from './tools/subscribe.ts'
+import {
+  handleJoinThread,
+  handleLeaveThread,
+  handleListThreads,
+  handleSendToThread,
+} from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.20.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.21.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -78,6 +84,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: 'set_status', description: 'Set ambient status.', inputSchema: { type: 'object' } },
     { name: 'set_intent', description: 'Set ambient intent.', inputSchema: { type: 'object' } },
     { name: 'doctor', description: 'Diagnostic snapshot.', inputSchema: { type: 'object' } },
+    {
+      name: 'join_thread',
+      description: 'Join a persistent thread and read its backlog.',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'leave_thread',
+      description: 'Leave a thread.',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'list_threads',
+      description: 'List threads this session belongs to.',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'send_to_thread',
+      description: 'Append a message to a thread; fans out to every member.',
+      inputSchema: { type: 'object' },
+    },
   ],
 }))
 
@@ -156,6 +182,34 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
         myName,
         inboxDir: MY_INBOX,
       })
+      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
+    }
+    case 'join_thread': {
+      const r = await handleJoinThread(
+        ctx,
+        { stateRoot: STATE_ROOT, me: ME, myName, mySentDir: MY_SENT },
+        String(args.thread_id ?? ''),
+      )
+      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
+    }
+    case 'leave_thread': {
+      const r = await handleLeaveThread(
+        ctx,
+        { stateRoot: STATE_ROOT, me: ME, myName, mySentDir: MY_SENT },
+        String(args.thread_id ?? ''),
+      )
+      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
+    }
+    case 'list_threads': {
+      const r = await handleListThreads(ctx, { stateRoot: STATE_ROOT, me: ME })
+      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
+    }
+    case 'send_to_thread': {
+      const r = await handleSendToThread(
+        ctx,
+        { stateRoot: STATE_ROOT, me: ME, myName, mySentDir: MY_SENT },
+        args as Parameters<typeof handleSendToThread>[2],
+      )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
     default:
@@ -264,7 +318,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.20 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.21 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )

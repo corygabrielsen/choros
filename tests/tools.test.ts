@@ -56,13 +56,6 @@ describe('handleSend', () => {
     ).rejects.toThrow(/exceeds/)
   })
 
-  test('rejects malformed reply_budget', async () => {
-    const ctx = fakeContext()
-    await expect(
-      handleSend(ctx, sendTargets, { to: 'peer', body: 'hi', reply_budget: -1 }),
-    ).rejects.toThrow()
-  })
-
   test('threads speech-act tag into the payload', async () => {
     const ctx = fakeContext()
     const r = await handleSend(ctx, sendTargets, {

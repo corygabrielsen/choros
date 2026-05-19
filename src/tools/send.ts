@@ -3,12 +3,11 @@ import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { recipientLastAgentTurnAgeMs, recipientLiveness } from '../health.ts'
 import { isSelf, parseMentions, resolveRecipient } from '../identity.ts'
-import { enforceBodyCap, validateReplyBudget, validateSpeechAct } from '../inbox.ts'
+import { enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 
 export interface SendArgs {
   to?: string
   body?: string
-  reply_budget?: number
   in_reply_to?: string
   act?: string
 }
@@ -41,7 +40,6 @@ export async function handleSend(
   if (!toArg) throw new Error('send: "to" is required')
   if (!body) throw new Error('send: "body" is required')
   enforceBodyCap(body, 'send')
-  const replyBudget = validateReplyBudget(args.reply_budget)
   const act = validateSpeechAct(args.act)
 
   const recipient = await resolveRecipient(ctx, targets.stateRoot, targets.projectsRoot, toArg)
@@ -74,7 +72,6 @@ export async function handleSend(
     ts: isoNow,
   }
   if (mentions.length > 0) msg.mentions = mentions
-  if (replyBudget !== undefined) msg.reply_budget = replyBudget
   if (act) msg.act = act
   if (typeof args.in_reply_to === 'string' && args.in_reply_to.trim()) {
     msg.in_reply_to = args.in_reply_to.trim()
