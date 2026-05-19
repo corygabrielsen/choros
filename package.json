@@ -1,17 +1,18 @@
 {
   "name": "choros",
-  "version": "0.29.0",
-  "description": "Inter-session messaging and swarm coordination for Claude Code sessions, over MCP + filesystem.",
+  "version": "1.0.0",
+  "description": "Inter-session messaging and swarm coordination for Claude Code sessions. One long-lived daemon + per-CC MCP shims; SQLite-backed state; JSON-RPC over Unix sockets.",
   "license": "MIT",
   "author": "Cory Gabrielsen",
   "private": true,
   "type": "module",
-  "module": "src/main.ts",
+  "module": "src/shim/main.ts",
   "imports": {
     "#choros/*": "./src/*"
   },
   "bin": {
-    "choros": "src/main.ts"
+    "choros": "src/shim/main.ts",
+    "choros-daemon": "src/daemon/main.ts"
   },
   "engines": {
     "bun": ">=1.3.0"

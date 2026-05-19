@@ -5,34 +5,30 @@ description: Inter-session messaging and swarm coordination between Claude Code 
 
 # Inter-session messaging
 
-Two surfaces, one filesystem:
+Two layers, one daemon:
 
-- **MCP channel** (`mcp__choros__send` + push notifications): the transport. Sends go through the typed tool; inbound messages arrive as `<channel source="choros" from="…" msg_id="…" …>` events the moment they land — no polling. Delivery acks arrive as `<channel source="choros-ack" msg_id="…" status="delivered|dropped" …>` — your agent learns whether a previously-sent message reached its recipient. Presence events arrive as `<channel source="choros-presence" event="join|leave|roster" peer_id="…" peer_name="…" …>` — the swarm self-discovers as sessions come online and shut down.
-- **Filesystem store** at `~/.local/state/choros/<session-id>/`: the state. MCP is a courier — it emits notifications, writes `.seen` sidecars only after end-to-end delivery is JSONL-confirmed, and writes `.ack`/`.dropped` files into the sender's `sent_acks/` dir to close the verification loop. It never moves files. This skill is the human-facing UX for browsing, reading, and archiving.
+- **MCP shim** (one per CC session): the typed tool surface. Sends go through `mcp__choros__send`; inbound messages arrive as `<channel source="choros" from="…" msg_id="…" …>` events the moment they land — no polling. Delivery acks arrive as `<channel source="choros-ack" msg_id="…" status="delivered|dropped" …>`. Presence + reaction + read-receipt events arrive on their own `source=` channels. The shim is thin; it forwards every call to the daemon over a Unix-socket JSON-RPC.
+- **choros daemon** (one per machine): the long-lived process backing every shim. Owns the SQLite database at `$XDG_STATE_HOME/choros/choros.sqlite` (WAL mode). All messaging state — sessions, messages, subscriptions, threads, reactions — lives there. The daemon also exposes an HTTP admin endpoint on `$XDG_STATE_HOME/choros/admin.sock` for cockpit + `curl --unix-socket` introspection.
 
 ## Identity
 
-Each Claude session has a stable UUID in `$CLAUDE_CODE_SESSION_ID` — that's the storage dir under `~/.local/state/choros/`. Its **display name** is whatever was last `/rename`'d (or the auto-generated `ai-title`), read live from `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (last `custom-title` wins, falling back to last `ai-title`, falling back to UUID prefix).
+Each Claude session has a stable UUID in `$CLAUDE_CODE_SESSION_ID` — that's the row id in the daemon's `sessions` table. The shim resolves the UUID once at boot (env vars + newest-jsonl-in-project-dir fallback) and registers it with the daemon. Display name is read live from `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (last `custom-title` wins, falling back to last `ai-title`, falling back to UUID prefix).
 
 `/rename my-frontend` in your session makes `/choros my-frontend hello` work from anywhere immediately. No registration step.
 
-Data layout for session `9cef7d70-…`:
+Schema sketch (the daemon owns; you shouldn't query directly):
 
 ```
-~/.local/state/choros/9cef7d70-1414-43f5-a973-ad910c5fa06a/
-  inbox/<id>.json                          # unread
-  inbox/<id>.json.seen                     # delivery receipt — JSONL-confirmed
-  inbox/read/<id>.json                     # archived by /choros read
-  sent/<id>.json                           # sender-side archive
-  sent_acks/<id>.ack                       # recipient confirmed delivery; sender's bun forwards as channel event
-  sent_acks/<id>.dropped                   # recipient's JSONL probe missed; agent receipt failed
-  presence/<ts>-<peer>.hello               # peer just came online; bun forwards as choros-presence channel event
-  presence/<ts>-<peer>.goodbye             # peer just shut down
-  .heartbeat                               # MCP server alive signal + agent status/intent/cwd (refreshed every 30s)
-  .agent_state                             # agent-set status/intent (merged into .heartbeat each tick)
-  .wedged                                  # ≥3 consecutive push timeouts; bun alive but pushes dropping
-  .lock                                    # MCP server identity lock
+sessions(id, display_name, host, cwd, lock_pid, heartbeat_at, agent_status, agent_intent, wedged_at)
+messages(id, from_session, to_session, topic, thread_id, in_reply_to, body, act, broadcast, ts, delivered_at, dropped_at, read_at)
+subscriptions(session_id, topic)
+threads(root_msg_id, title, created_at)
+thread_members(thread_id, session_id, joined_at)
+reactions(msg_id, by_session, emoji, reacted_at)
+pending_notifications(id, session_id, method, params_json, enqueued_at)
 ```
+
+The daemon socket + database survive CC restarts. The shim reconnects on bounce; pending notifications drain on the next `choros.register` handshake.
 
 ## Argument routing
 

@@ -1,111 +1,122 @@
 # Changelog
 
-This project follows [semver](https://semver.org/) once it reaches 1.0.
-Until then, breaking changes can land in any minor version.
+This project follows [semver](https://semver.org/). Breaking changes
+in 0.X were unbounded; from v1.0 on they trigger a major bump.
+
+## 1.0.0
+
+**Architectural reset.** Replaces the v0 per-CC-bun model with one
+long-lived daemon plus thin per-CC MCP shims, SQLite-backed state,
+and JSON-RPC over Unix sockets. The MCP tool surface is unchanged
+(`mcp__choros__send` / `broadcast` / `publish` / `subscribe` /
+`react` / `set_status` / `set_intent` / `doctor` / `join_thread` /
+`leave_thread` / `list_threads` / `send_to_thread`); everything else
+is new.
+
+### What's new
+
+- **`src/daemon/`** — long-lived bun process:
+  - `main.ts` binds `$XDG_STATE_HOME/choros/daemon.sock` (JSON-RPC) +
+    `admin.sock` (HTTP for cockpit + curl).
+  - `storage.ts` opens `choros.sqlite` in WAL mode; sequential
+    migrations from `src/sql/NNN-*.sql`.
+  - `rpc.ts` NDJSON JSON-RPC 2.0 server; per-connection notification
+    sink for daemon → shim push.
+  - `sessions.ts` in-memory `session_id` → socket routing table.
+  - `notify.ts` `deliverOrBuffer` — push to connected shim, else
+    enqueue in `pending_notifications` table for drain on reconnect.
+  - `handlers/*` — one file per RPC method, SQL-backed.
+  - `helpers.ts` — validation primitives + `resolveRecipient` +
+    liveness checks.
+  - `admin.ts` HTTP endpoints: `/peers`, `/stats`, `/health`.
+- **`src/shim/`** — per-CC MCP server:
+  - `main.ts` — registers with daemon at boot, forwards every MCP
+    tool call as JSON-RPC, re-emits daemon notifications as
+    `mcp.notification`, heartbeats every 30s, deregisters on
+    shutdown.
+  - `rpc-client.ts` — reconnecting JSON-RPC client; on disconnect
+    waits 1s and re-bootstraps; pending requests reject cleanly.
+- **`src/protocol/`** — shared shim ↔ daemon contract:
+  - `methods.ts` — JSON-RPC envelopes, `PROTOCOL_VERSION`, every
+    method's arg/result types.
+  - `notifications.ts` — push event names.
+- **`src/sql/000-init.sql`** — schema v1: `sessions`, `messages`,
+  `subscriptions`, `threads`, `thread_members`, `reactions`,
+  `pending_notifications`, `system_meta`.
+- **`install/`**:
+  - `choros.service` — systemd user unit.
+  - `com.choros.daemon.plist` — launchd LaunchAgent.
+  - `install.sh` / `uninstall.sh` — per-user install (no sudo).
+
+### What's gone
+
+The per-CC-bun model is replaced wholesale. These files are deleted
+because their responsibilities now live in the daemon:
+
+- `src/main.ts` — replaced by `src/shim/main.ts`
+- `src/acks.ts`, `src/ask-registry.ts`, `src/delivery.ts`,
+  `src/dir-cache.ts`, `src/health.ts`, `src/heartbeat.ts`,
+  `src/inbox.ts` (most of it), `src/mutex.ts`, `src/presence.ts`,
+  `src/threads.ts`, `src/watcher.ts`, all of `src/tools/`
+- Inotify watchers (the daemon is the single writer; no inotify
+  needed)
+- Per-file mutex serialization (SQLite WAL handles it)
+- `.heartbeat` / `.lock` / `.wedged` / `.agent_state` /
+  `.subscriptions` files (now table rows)
+- Per-session `inbox/` / `sent/` / `sent_acks/` / `presence/`
+  directories (now `messages` table + `reactions` table)
+- Per-session JSONL probes for delivery confirmation (the daemon
+  knows when delivery completes — `confirm_delivery` is an explicit
+  RPC the shim calls after CC processes an inbound message)
+
+### Why now
+
+Two motivations:
+
+1. **Develop without rebasing every CC**: pre-v1, every choros change
+   required restarting every running Claude Code session to pick up
+   the new bun. With a daemon, choros updates restart the daemon
+   only; shims keep running and auto-reconnect.
+2. **The architectural primitive for further work**: cross-machine
+   federation, durable observability, scheduled work that outlives
+   any session, background reaper / retention — all are now natural
+   extensions of the daemon, not new abstractions in their own right.
+
+### Install
+
+```bash
+bun install
+./install/install.sh   # Linux systemd --user OR macOS launchd
+```
+
+Wire shim into Claude Code MCP config:
+
+```json
+{
+  "mcpServers": {
+    "choros": {
+      "command": "bun",
+      "args": ["run", "/path/to/choros/src/shim/main.ts"]
+    }
+  }
+}
+```
+
+### Migration from v0.x
+
+State formats are incompatible. The v0 filesystem state under
+`$XDG_STATE_HOME/choros/<session-id>/` is ignored by the v1 daemon
+— the daemon creates a fresh SQLite database on first boot. To wipe
+v0 state:
+
+```bash
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/choros"
+```
+
+(Run after `./install/uninstall.sh` if you'd previously installed
+v0.)
 
 ## 0.29.0
 
-### Toolchain
-
-- `@biomejs/biome` 1.9.4 → 2.4.15 (config migrated to v2 schema; ~30
-  rules enabled across complexity / correctness / performance / style /
-  suspicious).
-- `typescript` ^5 → 6.0.3, with `exactOptionalPropertyTypes`,
-  `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`.
-- `simple-git-hooks` 2.11.1 → 2.13.1.
-- `tsc --noEmit` wired into the pre-commit gate. Hook now runs
-  `biome check` + `tsc --noEmit` + `bun test`; verified to block lint,
-  type, or test regressions.
-
-### Architectural extractions
-
-- **`src/watcher.ts`** — unified inotify + boot-prescan + periodic sweep
-  + capped respawn for `inbox/`, `presence/`, `sent_acks/`. Replaces
-  ~165 lines of repeated wiring in main.ts. Falls back to sweep-only
-  when inotifywait is unavailable.
-- **`src/mutex.ts`** — `KeyedMutex` with per-op timeout and self-pruning
-  queue. Replaces the bespoke `serializeOnThread` and is now also used
-  for `.agent_state` and `.subscriptions` so concurrent
-  `set_status` + `set_intent` (or `subscribe` + `unsubscribe`) cannot
-  race-clobber each other.
-- **`src/dir-cache.ts`** — `ensureDir(ctx, path)` memoizes "already
-  created in this bun lifetime" so the fan-out hot path doesn't pay
-  a `mkdir -p` syscall per peer per message.
-- **`src/constants.ts`** — `LIVE_MAX_AGE_MS` + `DEAD_AGE_MS` moved out
-  of `health.ts` so `identity.ts` no longer duplicates the threshold
-  to avoid an import cycle.
-
-### Bug-hunt round 3 (43 findings, 39 addressed across 7 categories)
-
-- **Identity & serialization (A)**: msg_id format now preserves
-  milliseconds + per-process counter (no more same-second collisions);
-  `.agent_state` and `.subscriptions` serialized via `KeyedMutex`;
-  `takeLock` post-write-verifies its pid won the race; `.react` files
-  keyed on (msg_id, reactor); empty `msg_id` on inbound now skipped
-  rather than dedup-bucketed.
-- **Input validation (B)**: send tool's `msg_id` arg sanitized;
-  inbound message file-size cap (256 KB) + body cap (64 KB) enforced
-  before parse; mention list filtered to strings + capped at 64;
-  presence meta fields coerced via string-only filter.
-- **Shutdown/signal (C)**: stdout EPIPE goes through `shutdownAsync`
-  instead of bypassing it; stderr error handler installed; SIGHUP
-  handled; `.lock` released on every shutdown path; boot-time
-  `cleanupOrphanTmpFiles` sweep for `*.<pid>.<counter>.tmp` files
-  whose writer pid is dead.
-- **Watcher symmetry (D)**: see "Architectural extractions" above.
-- **Delivery correctness (E)**: `verifyJsonlReceipt` now snapshots the
-  JSONL size BEFORE the push so msg_ids CC writes during/before push
-  resolution land in the verification window; broadcast / publish /
-  broadcastPresence / broadcastRename per-peer try/catch (no
-  Promise.all-rejects-drops-successes); stale `.wedged` cleared at
-  boot.
-- **Spec drift (F)**: SKILL.md doctor section aligned to actual
-  no-args contract; react section documents `from_session`;
-  emitPresence JSDoc corrected; `SendResult.live_status` narrowed
-  from `string` to `RecipientHealth['status']` literal union.
-- **Resource hygiene (G)**: thread mutation queue uses per-op timeout;
-  `lastCorruptParseCount` LRU-capped at 1024; `realSpawner` registers
-  a single-fire exit channel that routes both `child.on('error')` and
-  `child.on('exit')` through one handler list.
-
-### Perf-hunt round 3 (30 findings, 22 addressed across 4 batches)
-
-- **Batch 1** — JSONL tail read (was buffering multi-MB into a string
-  array on every doctor/broadcast/publish call); startup parallelism
-  for boot mkdir + cleanup + initial heartbeat; disk JSON pretty-print
-  dropped; `ensureDir` memoization.
-- **Batch 2** — `listKnownInstances` per-peer probes parallelized via
-  `Promise.all`; `readDisplayNameForJsonl` complexity refactor.
-- **Batch 3** — heartbeat reads coalesced (`isLivePeer`,
-  `recipientLiveness`, doctor each now do `Promise.all([readFile,
-  stat])` instead of serial stat-then-read); redundant `existsSync(src)`
-  dropped from `emitInboxMessage`; `runWithLimit` uses index cursor
-  instead of `Array.shift()` for O(1) dispatch; sweep tick jittered
-  across `[0, sweepIntervalMs)` so the three watchers don't fire in
-  lock-step; `realSpawner` exit channel unified.
-- **Batch 4** — `findJsonlForSession` slow path now probes candidates
-  in parallel + drops the `existsSync`-then-`stat` redundancy;
-  `InboxTargets.cachedOwnJsonl` accessor threads the identity layer's
-  cached JSONL path through to the hot delivery path.
-
-### Repo hygiene
-
-- MIT `LICENSE` added.
-- `README.md` rewritten (was still saying `msg-channel` with stale
-  `bun run index.ts` install instructions). New README covers
-  architecture, scripts, and the pre-commit gate.
-- `CHANGELOG.md` introduced (this file).
-- `.editorconfig` (utf-8 / lf / 2-space).
-- `.gitignore` expanded: `dist/`, `coverage/`, `*.tmp`, `*.bak`,
-  `.DS_Store`, `.env`, IDE dirs.
-- `package.json` metadata: description, license, author,
-  `engines.bun >=1.3.0`, `test:cov` script.
-- `retain.sh` references corrected (was pre-rename `msg-channel`
-  paths); now honors `XDG_STATE_HOME`. `migrate.sh` deleted —
-  one-off helper that completed weeks ago.
-- All relative imports purged via `package.json` `imports` field
-  (`#choros/*`).
-
-## 0.28 and earlier
-
-See git log; pre-changelog history is captured in commit messages.
+(Previous version. See git log; pre-v1 history is captured in commit
+messages.)

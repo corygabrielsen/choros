@@ -1,54 +1,20 @@
-import { join } from 'node:path'
-import type { AskRegistry } from '#choros/ask-registry.ts'
-import {
-  JSONL_VERIFY_TIMEOUT_MS,
-  jsonlSize,
-  pushChannelNotification,
-  verifyJsonlReceipt,
-  type WedgeState,
-  writeAckToSender,
-} from '#choros/delivery.ts'
-import { ensureDir } from '#choros/dir-cache.ts'
-import type { Context } from '#choros/effects.ts'
-import { findJsonlForSession } from '#choros/identity.ts'
+/**
+ * Pure validators + constants shared by the daemon's tool handlers.
+ *
+ * Pre-v1 this file housed the per-CC inbox-processing pipeline. The
+ * daemon owns delivery now (see `src/daemon/handlers/*`); only the
+ * sub-100-line slice of pure validation lives on here, imported from
+ * a handful of daemon handlers.
+ */
 
-/** Maximum UTF-8 body size for any outbound message, enforced at every
- *  outbound tool boundary. Blob overflow is intentionally not handled —
- *  callers split or trim large content themselves. */
+/** Maximum UTF-8 body size for any outbound message. */
 export const BODY_CAP_BYTES = 64 * 1024
 
-/** Cadence for the periodic re-emit sweep. inotify fires once per file
- *  change; the sweep retries inbox files whose initial push timed out. */
-export const SWEEP_INTERVAL_MS = 60_000
-/** Cap on the dropped-ack dedup Set. Older entries fall off so a long-
- *  running bun under sustained wedge doesn't grow memory unboundedly.
- *  We use insertion-order Set semantics; on overflow, drop the oldest. */
-export const DROPPED_ACK_DEDUP_CAP = 1024
+/** File-size cap on inbound messages the daemon will deserialize. */
+export const INBOUND_MESSAGE_CAP_BYTES = 256 * 1024
 
-/**
- * Coerce an arbitrary value to a string field, rejecting non-string types.
- *
- * @remarks
- * Used at trust boundaries where attacker-controllable input flows into
- * metadata or filesystem paths. Rejects rather than coerces: a naive
- * `String(value ?? '')` would turn `{}` into `"[object Object]"` and
- * poison filesystem paths and routing keys.
- *
- * @param value - The candidate.
- * @param label - Diagnostic label for error messages.
- * @returns Empty string when `value` is null/undefined; the string when
- *   it's a string; throws otherwise.
- */
-export function asStringField(value: unknown, label: string): string {
-  if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value
-  throw new Error(`${label}: expected string, got ${typeof value}`)
-}
-
-/** Speech-act taxonomy. Optional `act` field on every outbound message.
- *  Borrowed from speech-act theory in linguistics — the type of utterance
- *  carries semantic content distinct from the body. Recipients can route
- *  attention based on it (answer QUESTIONs first, defer ANNOUNCEments). */
+/** Speech-act taxonomy. Optional `act` field on every outbound
+ *  message; carries an utterance type distinct from the body. */
 export const SPEECH_ACTS = [
   'REQUEST',
   'COMMIT',
@@ -57,15 +23,19 @@ export const SPEECH_ACTS = [
   'ANSWER',
   'OBSERVATION',
 ] as const
-/** Union of valid {@link SPEECH_ACTS} values. */
 export type SpeechAct = (typeof SPEECH_ACTS)[number]
 
-/**
- * Validate an optional speech-act tag.
- *
- * @returns The act when valid, `undefined` when omitted.
- * @throws When `value` is non-string or not a member of {@link SPEECH_ACTS}.
- */
+/** Coerce an arbitrary value to a non-coerced string, rejecting any
+ *  non-string input. Used at trust boundaries where attacker-
+ *  controllable input flows into SQL or filesystem paths. */
+export function asStringField(value: unknown, label: string): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  throw new Error(`${label}: expected string, got ${typeof value}`)
+}
+
+/** Validate an optional speech-act tag. Returns the act when valid,
+ *  `undefined` when omitted, throws when malformed. */
 export function validateSpeechAct(value: unknown): SpeechAct | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'string') throw new Error('act must be a string')
@@ -75,350 +45,8 @@ export function validateSpeechAct(value: unknown): SpeechAct | undefined {
   return value as SpeechAct
 }
 
-/** Paths + identity needed to process a single inbox file. Passed to
- *  every emit/archive operation so the module stays free of module-level
- *  state. */
-export interface InboxTargets {
-  stateRoot: string
-  projectsRoot: string
-  me: string
-  myName: string
-  wedgePath: string
-  inboxDir: string
-  readDir: string
-  /** Lazy accessor for the cached path to OWN CC JSONL. Lets emit avoid
-   *  paying `findJsonlForSession` on every delivered message — the
-   *  identity layer already resolved it during `resolveMyNameCached`.
-   *  Returns null if the cache is unpopulated; emit falls back to the
-   *  on-demand lookup in that case. */
-  cachedOwnJsonl?: () => string | null
-}
-
-/**
- * On-disk + on-wire shape of a choros message. Optional fields are
- * populated only when meaningful for that message variant (broadcast,
- * topic publish, thread post, reply).
- */
-export interface InboxMessage {
-  id: string
-  ts?: string
-  from_session?: string
-  from_name?: string
-  from_host?: string
-  from_cwd?: string
-  body?: string
-  in_reply_to?: string
-  thread_id?: string
-  topic?: string
-  broadcast?: boolean
-  mentions?: string[]
-  act?: SpeechAct
-}
-
-/** Hard cap on `.json` file size we'll deserialize into a message. The
- *  body cap is 64 KB plus per-field overhead; this is a generous bound
- *  that lets normal messages through while rejecting blobs that would
- *  pump multi-MB content through the channel push. */
-export const INBOUND_MESSAGE_CAP_BYTES = 256 * 1024
-
-/** Read a single inbox `.json`. Returns null on missing, unparseable, or
- *  over-cap. The cap is enforced at the file-size level (via stat)
- *  before reading, so we never load attacker-controlled gigabytes. */
-export async function readInboxMessage(
-  ctx: Pick<Context, 'fs' | 'proc'>,
-  filePath: string,
-): Promise<InboxMessage | null> {
-  try {
-    const s = await ctx.fs.stat(filePath)
-    if (s.size > INBOUND_MESSAGE_CAP_BYTES) {
-      ctx.proc.stderr(
-        `[choros] ${filePath}: ${s.size}B exceeds inbound cap (${INBOUND_MESSAGE_CAP_BYTES}B); skipping\n`,
-      )
-      return null
-    }
-  } catch {
-    return null
-  }
-  let raw: string
-  try {
-    raw = await ctx.fs.readFile(filePath)
-  } catch {
-    return null
-  }
-  let data: InboxMessage
-  try {
-    data = JSON.parse(raw) as InboxMessage
-  } catch (e) {
-    const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros] failed to parse ${filePath}: ${m}\n`)
-    return null
-  }
-  if (typeof data.body === 'string' && Buffer.byteLength(data.body, 'utf8') > BODY_CAP_BYTES) {
-    ctx.proc.stderr(`[choros] ${filePath}: body exceeds ${BODY_CAP_BYTES}B; skipping\n`)
-    return null
-  }
-  return data
-}
-
-/** Outcome of an {@link emitInboxMessage} call.
- *
- *  - `emitted`: pushed AND JSONL-confirmed; `.seen` sidecar + `.ack` written.
- *  - `skipped`: filename ineligible (wrong extension, already seen, etc).
- *  - `timeout`: push timed out; file left for next sweep.
- *  - `dropped`: push resolved but JSONL probe missed; `.dropped` written. */
-export interface EmitResult {
-  status: 'emitted' | 'skipped' | 'timeout' | 'dropped'
-}
-
-/** Try to emit an inbox message as a channel event to OWN agent. On
- *  notification timeout or JSONL probe miss, leave the `.json` on disk
- *  (no `.seen` sidecar) so the next sweep retries. On JSONL miss, also
- *  write a `.dropped` ack to the sender (dedup'd via emittedDroppedAcks
- *  so the same un-deliverable msg_id doesn't spam the sender). */
-export async function emitInboxMessage(
-  ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env' | 'mcp'>,
-  targets: InboxTargets,
-  wedgeState: WedgeState,
-  emittedDroppedAcks: Set<string>,
-  inFlight: Set<string>,
-  filename: string,
-  askRegistry?: AskRegistry,
-): Promise<EmitResult> {
-  if (!filename.endsWith('.json')) return { status: 'skipped' }
-  if (filename.startsWith('.')) return { status: 'skipped' }
-  if (filename.endsWith('.seen')) return { status: 'skipped' }
-  // Re-entry guard: inotify can fire twice on the same file (close_write +
-  // moved_to); a periodic sweep can race the watcher. Two concurrent emits
-  // for the same filename would double-fire the channel push. Guard at the
-  // filename granularity (not msg_id — file may not be parseable yet).
-  if (inFlight.has(filename)) return { status: 'skipped' }
-  const src = join(targets.inboxDir, filename)
-  const sidecar = `${src}.seen`
-  const archived = join(targets.readDir, filename)
-  if (ctx.fs.existsSync(sidecar)) return { status: 'skipped' }
-  if (ctx.fs.existsSync(archived)) return { status: 'skipped' }
-  // No existsSync(src) guard — readInboxMessage returns null on ENOENT,
-  // and emitInboxMessageInner translates that to `{ status: 'skipped' }`.
-  // One redundant syscall per inbox dispatch removed.
-
-  inFlight.add(filename)
-  try {
-    return await emitInboxMessageInner(
-      ctx,
-      targets,
-      wedgeState,
-      emittedDroppedAcks,
-      filename,
-      src,
-      sidecar,
-      askRegistry,
-    )
-  } finally {
-    inFlight.delete(filename)
-  }
-}
-
-function safeString(v: unknown): string | undefined {
-  return typeof v === 'string' ? v : undefined
-}
-
-/** Maximum mention-list size carried in channel meta. A mention-bomb
- *  inbound msg would otherwise pump a multi-MB meta string through the
- *  push and could execute attacker-defined `toString` on non-string
- *  array items. Truncation keeps the diagnostic value (first N peers)
- *  without unbounded growth. */
-const MAX_MENTIONS_IN_META = 64
-
-function buildInboxMeta(
-  data: InboxMessage,
-  me: string,
-  myName: string,
-  msgId: string,
-): Record<string, string> {
-  const meta: Record<string, string> = {
-    source: 'choros',
-    msg_id: msgId,
-    ts: safeString(data.ts) ?? '',
-    from_session: safeString(data.from_session) ?? '',
-    from_name: safeString(data.from_name) ?? 'unknown',
-    from_host: safeString(data.from_host) ?? '',
-    from_cwd: safeString(data.from_cwd) ?? '',
-  }
-  const irt = safeString(data.in_reply_to)
-  if (irt) meta.in_reply_to = irt
-  const tid = safeString(data.thread_id)
-  if (tid) meta.thread_id = tid
-  const top = safeString(data.topic)
-  if (top) meta.topic = top
-  if (data.broadcast) meta.broadcast = 'true'
-  if (data.act) meta.act = data.act
-  if (Array.isArray(data.mentions) && data.mentions.length > 0) {
-    // Filter to strings only — attacker-controllable array could contain
-    // non-string items whose `toString` runs at .join time. Then cap so
-    // a mention-bomb (10000 entries) cannot pump a multi-MB meta blob
-    // through the push.
-    const stringMentions = data.mentions.filter((m): m is string => typeof m === 'string')
-    const mentionedMe = stringMentions.some(m => m === me || m === myName)
-    if (mentionedMe) meta.mentioned_me = 'true'
-    const capped = stringMentions.slice(0, MAX_MENTIONS_IN_META)
-    if (capped.length > 0) meta.mentions = capped.join(',')
-    if (stringMentions.length > MAX_MENTIONS_IN_META) {
-      meta.mentions_truncated = String(stringMentions.length - MAX_MENTIONS_IN_META)
-    }
-  }
-  return meta
-}
-
-async function recordDroppedAck(
-  ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
-  targets: InboxTargets,
-  emittedDroppedAcks: Set<string>,
-  msgId: string,
-  data: InboxMessage,
-): Promise<void> {
-  if (emittedDroppedAcks.has(msgId)) return
-  emittedDroppedAcks.add(msgId)
-  // Bound the dedup set so a long-running bun under sustained wedge
-  // doesn't grow memory unboundedly. Drop the oldest entry. Worst case
-  // on overflow: a long-dead msg's dropped-ack re-fires once, which is
-  // acceptable noise vs. an unbounded leak.
-  while (emittedDroppedAcks.size > DROPPED_ACK_DEDUP_CAP) {
-    const oldest = emittedDroppedAcks.values().next().value
-    if (oldest !== undefined) emittedDroppedAcks.delete(oldest)
-  }
-  try {
-    await writeAckToSender(
-      ctx,
-      { stateRoot: targets.stateRoot, me: targets.me, myName: targets.myName },
-      data,
-      'dropped',
-      ctx.proc.pid(),
-    )
-  } catch (e: unknown) {
-    const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros] .dropped ack write failed: ${m}\n`)
-  }
-}
-
-async function recordDelivered(
-  ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
-  targets: InboxTargets,
-  sidecar: string,
-  data: InboxMessage,
-): Promise<void> {
-  const marker = JSON.stringify({
-    pushed_at: ctx.clock.nowIso(),
-    verified_at: ctx.clock.nowIso(),
-    pid: ctx.proc.pid(),
-  })
-  try {
-    await ctx.fs.writeFile(sidecar, marker)
-  } catch (e: unknown) {
-    // If we can't write .seen, the next sweep will re-emit the message.
-    // The push already happened, so the recipient saw it; only the
-    // sender's verify_path stat lies until the underlying fs problem
-    // is resolved.
-    const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros] .seen sidecar write failed for ${sidecar}: ${m}\n`)
-  }
-  try {
-    await writeAckToSender(
-      ctx,
-      { stateRoot: targets.stateRoot, me: targets.me, myName: targets.myName },
-      data,
-      'delivered',
-      ctx.proc.pid(),
-    )
-  } catch (e: unknown) {
-    const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros] .ack write failed: ${m}\n`)
-  }
-}
-
-async function emitInboxMessageInner(
-  ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env' | 'mcp'>,
-  targets: InboxTargets,
-  wedgeState: WedgeState,
-  emittedDroppedAcks: Set<string>,
-  _filename: string,
-  src: string,
-  sidecar: string,
-  askRegistry?: AskRegistry,
-): Promise<EmitResult> {
-  const data = await readInboxMessage(ctx, src)
-  if (!data) return { status: 'skipped' }
-  if (askRegistry) askRegistry.notifyIfWaiting(data)
-  const msgId = safeString(data.id) ?? ''
-  if (!msgId) {
-    // A missing msg_id is corrupt input — without it we can't dedup,
-    // can't write a `.dropped` ack, and can't track delivery. Skip
-    // entirely rather than bucket every empty-id message into the
-    // same dedup slot (which would silently suppress all subsequent
-    // ones).
-    ctx.proc.stderr(`[choros] ${src}: missing msg_id; skipping\n`)
-    return { status: 'skipped' }
-  }
-  const meta = buildInboxMeta(data, targets.me, targets.myName, msgId)
-
-  // Capture JSONL size BEFORE the push so the verify window includes any
-  // bytes CC writes during the push's resolution (CC may flush the
-  // msg_id record at exactly that instant). Prefer the cached own-jsonl
-  // path (populated by the identity layer at boot) over re-walking the
-  // projects root on every delivery.
-  const jsonl =
-    targets.cachedOwnJsonl?.() ?? (await findJsonlForSession(ctx, targets.projectsRoot, targets.me))
-  const verifyStartSize = await jsonlSize(ctx, jsonl)
-
-  const push = await pushChannelNotification(
-    ctx,
-    wedgeState,
-    targets.wedgePath,
-    msgId,
-    String(data.body ?? ''),
-    meta,
-  )
-  if (push !== 'ok') return { status: 'timeout' }
-
-  const verified = await verifyJsonlReceipt(
-    ctx,
-    jsonl,
-    msgId,
-    verifyStartSize,
-    JSONL_VERIFY_TIMEOUT_MS,
-  )
-  if (!verified) {
-    ctx.proc.stderr(
-      `[choros] push resolved but msg_id=${msgId} NOT in own JSONL — withholding .seen; sweep retries.\n`,
-    )
-    await recordDroppedAck(ctx, targets, emittedDroppedAcks, msgId, data)
-    return { status: 'dropped' }
-  }
-  emittedDroppedAcks.delete(msgId)
-  await recordDelivered(ctx, targets, sidecar, data)
-  return { status: 'emitted' }
-}
-
-/** Move an inbox `.json` into `read/` and remove its `.seen` sidecar.
- *  Returns the archived path. Used by /choros read and by the read-
- *  receipt emitter (which fires a channel event to the original sender). */
-export async function archiveInboxMessage(
-  ctx: Pick<Context, 'fs'>,
-  targets: Pick<InboxTargets, 'inboxDir' | 'readDir'>,
-  filename: string,
-): Promise<string> {
-  const src = join(targets.inboxDir, filename)
-  const dst = join(targets.readDir, filename)
-  await ensureDir(ctx, targets.readDir)
-  await ctx.fs.rename(src, dst)
-  try {
-    await ctx.fs.unlink(`${src}.seen`)
-  } catch {
-    /* already gone */
-  }
-  return dst
-}
-
-/** Enforce the body cap on outbound (send / broadcast / publish). */
+/** Enforce the body byte-cap on outbound (send / broadcast / publish /
+ *  send_to_thread). UTF-8 byte length, not character count. */
 export function enforceBodyCap(body: string, label: string): void {
   const bytes = Buffer.byteLength(body, 'utf8')
   if (bytes > BODY_CAP_BYTES) {
