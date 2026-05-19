@@ -1,16 +1,17 @@
 #!/bin/sh
-# Retention sweep for ~/.local/state/choros/. Deletes .json files older than 30 days from
-# every instance's inbox/read/ and sent/ directories. Live inbox/ is untouched.
+# Retention sweep for choros state. Deletes .json files older than $TTL_DAYS
+# (default 30) from every session's inbox/read/ and sent/ directories.
+# Live inbox/ is untouched.
 #
-# Install as a nightly cron:
-#   echo "30 3 * * *  $HOME/.claude/msg-channel/retain.sh >> $HOME/.claude/msg-channel/retain.log 2>&1" | crontab -
+# Install as a nightly cron (adjust path if you cloned to a different location):
+#   echo "30 3 * * *  $HOME/code/choros/retain.sh >> $HOME/code/choros/retain.log 2>&1" | crontab -
 #
-# Or run manually any time.
+# Or run manually any time. Honors XDG_STATE_HOME.
 
 set -eu
 
-TTL_DAYS="${MSG_RETAIN_DAYS:-30}"
-ROOT="$HOME/.claude/msg"
+TTL_DAYS="${CHOROS_RETAIN_DAYS:-30}"
+ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/choros"
 
 [ -d "$ROOT" ] || exit 0
 
