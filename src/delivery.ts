@@ -142,24 +142,31 @@ export async function cleanupOrphanTmpFiles(
   return removed
 }
 
-/** Poll an own-CC JSONL for a substring match on msg_id. Uses an append-only
- *  window — the search only considers bytes written AFTER the call started,
- *  so an older record that happened to embed the msg_id literal cannot
- *  false-positive. Returns true on first match within `timeoutMs`. */
+/** Snapshot the size of `jsonl` (0 on ENOENT). Callers capture this
+ *  BEFORE issuing the push so the subsequent delta scan can't miss a
+ *  msg_id that CC writes during/before the push's resolution. */
+export async function jsonlSize(ctx: Pick<Context, 'fs'>, jsonl: string | null): Promise<number> {
+  if (!jsonl) return 0
+  try {
+    return (await ctx.fs.stat(jsonl)).size
+  } catch {
+    return 0
+  }
+}
+
+/** Poll an own-CC JSONL for a substring match on msg_id starting from a
+ *  pre-captured `startSize`. Uses an append-only window so an older
+ *  record that happens to embed the msg_id literal cannot false-positive.
+ *  Returns true on first match within `timeoutMs`. */
 export async function verifyJsonlReceipt(
   ctx: Pick<Context, 'fs' | 'clock'>,
   jsonl: string | null,
   msgId: string,
+  startSize: number,
   timeoutMs: number,
 ): Promise<boolean> {
   if (!msgId) return false
   if (!jsonl) return true
-  let startSize: number
-  try {
-    startSize = (await ctx.fs.stat(jsonl)).size
-  } catch {
-    startSize = 0
-  }
   const deadline = ctx.clock.nowMs() + timeoutMs
   let cursor = startSize
   while (ctx.clock.nowMs() < deadline) {

@@ -89,6 +89,16 @@ for (const dir of [MY_INBOX, MY_ACKS, MY_PRESENCE]) {
   if (removed > 0) ctx.proc.stderr(`[choros] swept ${removed} orphan .tmp file(s) from ${dir}\n`)
 }
 
+// Clear any `.wedged` marker from the previous bun lifetime. The marker
+// is gated on an in-memory `consecutiveTimeouts` counter that resets on
+// restart, so without an explicit boot clear, peers would see the new
+// bun as permanently wedged until it actually times out 3 more times.
+try {
+  await ctx.fs.unlink(join(MY_ROOT, '.wedged'))
+} catch {
+  /* no stale marker — expected on a clean prior shutdown */
+}
+
 // Refuse to start if another live bun holds this identity. Without this,
 // two buns for the same session race on heartbeat writes, inbox watching,
 // and presence broadcasts. We use the heartbeat pid (not a separate lock

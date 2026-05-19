@@ -26,6 +26,7 @@ export interface PublishResult {
   msg_id: string
   topic: string
   delivered_to: string[]
+  failures: { recipient: string; error: string }[]
 }
 
 /**
@@ -85,13 +86,20 @@ export async function handlePublish(
   }
   await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase, null, 2))
+  const delivered: string[] = []
+  const failures: { recipient: string; error: string }[] = []
   await Promise.all(
     subscribers.map(async subId => {
-      const payload = JSON.stringify({ ...msgBase, to_session: subId }, null, 2)
-      const inboxDir = join(targets.stateRoot, subId, 'inbox')
-      await ctx.fs.mkdir(inboxDir, { recursive: true })
-      await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
+      try {
+        const payload = JSON.stringify({ ...msgBase, to_session: subId }, null, 2)
+        const inboxDir = join(targets.stateRoot, subId, 'inbox')
+        await ctx.fs.mkdir(inboxDir, { recursive: true })
+        await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
+        delivered.push(subId)
+      } catch (e: unknown) {
+        failures.push({ recipient: subId, error: e instanceof Error ? e.message : String(e) })
+      }
     }),
   )
-  return { msg_id: id, topic, delivered_to: subscribers }
+  return { msg_id: id, topic, delivered_to: delivered, failures }
 }

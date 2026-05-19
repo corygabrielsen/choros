@@ -78,7 +78,7 @@ describe('atomicWrite', () => {
 describe('verifyJsonlReceipt (append-only window)', () => {
   test('returns true optimistically when no jsonl exists', async () => {
     const ctx = fakeContext()
-    expect(await verifyJsonlReceipt(ctx, null, 'msg-1', 100)).toBe(true)
+    expect(await verifyJsonlReceipt(ctx, null, 'msg-1', 0, 100)).toBe(true)
   })
 
   // Note: the "finds msg_id in appended bytes" positive case is exercised
@@ -92,7 +92,8 @@ describe('verifyJsonlReceipt (append-only window)', () => {
     const ctx = fakeContext()
     const jsonl = '/state/jsonl'
     await ctx.fs.writeFile(jsonl, '{"older":"event","msg_id":"msg-1"}\n')
-    const probe = verifyJsonlReceipt(ctx, jsonl, 'msg-1', 100)
+    const startSize = (await ctx.fs.stat(jsonl)).size
+    const probe = verifyJsonlReceipt(ctx, jsonl, 'msg-1', startSize, 100)
     for (let i = 0; i < 5; i++) {
       await new Promise(r => setTimeout(r, 5))
       ctx.clock.advance(50)
@@ -104,7 +105,8 @@ describe('verifyJsonlReceipt (append-only window)', () => {
     const ctx = fakeContext()
     const jsonl = '/state/jsonl'
     await ctx.fs.writeFile(jsonl, 'irrelevant\n')
-    const probe = verifyJsonlReceipt(ctx, jsonl, 'msg-1', 100)
+    const startSize = (await ctx.fs.stat(jsonl)).size
+    const probe = verifyJsonlReceipt(ctx, jsonl, 'msg-1', startSize, 100)
     // Tick virtual clock past deadline
     for (let i = 0; i < 5; i++) {
       await new Promise(r => setTimeout(r, 5))

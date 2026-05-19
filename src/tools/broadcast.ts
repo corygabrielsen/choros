@@ -24,6 +24,7 @@ export interface BroadcastTargets {
 export interface BroadcastResult {
   msg_id: string
   recipients: string[]
+  failures: { recipient: string; error: string }[]
 }
 
 /**
@@ -79,13 +80,20 @@ export async function handleBroadcast(
   }
   await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase, null, 2))
+  const delivered: string[] = []
+  const failures: { recipient: string; error: string }[] = []
   await Promise.all(
     recipients.map(async r => {
-      const payload = JSON.stringify({ ...msgBase, to_session: r.id, to_name: r.name }, null, 2)
-      const inboxDir = join(targets.stateRoot, r.id, 'inbox')
-      await ctx.fs.mkdir(inboxDir, { recursive: true })
-      await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
+      try {
+        const payload = JSON.stringify({ ...msgBase, to_session: r.id, to_name: r.name }, null, 2)
+        const inboxDir = join(targets.stateRoot, r.id, 'inbox')
+        await ctx.fs.mkdir(inboxDir, { recursive: true })
+        await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
+        delivered.push(r.id)
+      } catch (e: unknown) {
+        failures.push({ recipient: r.id, error: e instanceof Error ? e.message : String(e) })
+      }
     }),
   )
-  return { msg_id: id, recipients: recipients.map(r => r.id) }
+  return { msg_id: id, recipients: delivered, failures }
 }

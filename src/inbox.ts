@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import type { AskRegistry } from './ask-registry.ts'
 import {
   JSONL_VERIFY_TIMEOUT_MS,
+  jsonlSize,
   pushChannelNotification,
   verifyJsonlReceipt,
   type WedgeState,
@@ -300,6 +301,12 @@ async function emitInboxMessageInner(
   const msgId = safeString(data.id) ?? ''
   const meta = buildInboxMeta(data, targets.me, targets.myName, msgId)
 
+  // Capture JSONL size BEFORE the push so the verify window includes any
+  // bytes CC writes during the push's resolution (CC may flush the
+  // msg_id record at exactly that instant).
+  const jsonl = await findJsonlForSession(ctx, targets.projectsRoot, targets.me)
+  const verifyStartSize = await jsonlSize(ctx, jsonl)
+
   const push = await pushChannelNotification(
     ctx,
     wedgeState,
@@ -310,8 +317,13 @@ async function emitInboxMessageInner(
   )
   if (push !== 'ok') return { status: 'timeout' }
 
-  const jsonl = await findJsonlForSession(ctx, targets.projectsRoot, targets.me)
-  const verified = await verifyJsonlReceipt(ctx, jsonl, msgId, JSONL_VERIFY_TIMEOUT_MS)
+  const verified = await verifyJsonlReceipt(
+    ctx,
+    jsonl,
+    msgId,
+    verifyStartSize,
+    JSONL_VERIFY_TIMEOUT_MS,
+  )
   if (!verified) {
     ctx.proc.stderr(
       `[choros] push resolved but msg_id=${msgId} NOT in own JSONL — withholding .seen; sweep retries.\n`,

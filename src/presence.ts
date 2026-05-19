@@ -66,12 +66,22 @@ export async function broadcastRename(
   newName: string,
 ): Promise<LivePeer[]> {
   const peers = await liveEligiblePeers(ctx, targets)
+  const delivered: LivePeer[] = []
   await Promise.all(
-    peers.map(p =>
-      writePresence(ctx, targets, p.id, 'rename', { old_name: oldName, new_name: newName }),
-    ),
+    peers.map(async p => {
+      try {
+        await writePresence(ctx, targets, p.id, 'rename', {
+          old_name: oldName,
+          new_name: newName,
+        })
+        delivered.push(p)
+      } catch (e: unknown) {
+        const m = e instanceof Error ? e.message : String(e)
+        ctx.proc.stderr(`[choros] rename broadcast to ${p.id} failed: ${m}\n`)
+      }
+    }),
   )
-  return peers
+  return delivered
 }
 
 /** Enumerate live peers, applying three-layer self-exclusion + pid-alive
@@ -98,8 +108,19 @@ export async function broadcastPresence(
   kind: 'hello' | 'goodbye',
 ): Promise<LivePeer[]> {
   const peers = await liveEligiblePeers(ctx, targets)
-  await Promise.all(peers.map(p => writePresence(ctx, targets, p.id, kind)))
-  return peers
+  const delivered: LivePeer[] = []
+  await Promise.all(
+    peers.map(async p => {
+      try {
+        await writePresence(ctx, targets, p.id, kind)
+        delivered.push(p)
+      } catch (e: unknown) {
+        const m = e instanceof Error ? e.message : String(e)
+        ctx.proc.stderr(`[choros] ${kind} broadcast to ${p.id} failed: ${m}\n`)
+      }
+    }),
+  )
+  return delivered
 }
 
 /** Inputs to {@link emitBootRoster}. */
