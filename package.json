@@ -13,19 +13,20 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "check": "bun run lint && bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run lint && bun run typecheck && bun test",
     "prepare": "simple-git-hooks"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.4.15",
     "@types/bun": "latest",
-    "simple-git-hooks": "^2.11.1"
+    "simple-git-hooks": "^2.13.1"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "6.0.3"
   },
   "simple-git-hooks": {
     "pre-commit": "bun run check"

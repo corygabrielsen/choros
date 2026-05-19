@@ -2,6 +2,87 @@ import { join } from 'node:path'
 import { PUSH_TIMEOUT_MS, withTimeout } from './delivery.ts'
 import type { Context } from './effects.ts'
 
+type AckKind = 'react' | 'read' | 'ack'
+
+interface AckEvent {
+  content: string
+  meta: Record<string, string>
+}
+
+function s(value: unknown): string {
+  return typeof value === 'string'
+    ? value
+    : value === undefined || value === null
+      ? ''
+      : String(value)
+}
+
+function buildReactionEvent(data: Record<string, unknown>): AckEvent {
+  const reactor = s(data.from_name) || s(data.from_session).slice(0, 8) || 'unknown'
+  return {
+    content: `${reactor} reacted ${s(data.emoji)} to msg_id=${s(data.msg_id)}`,
+    meta: {
+      source: 'choros-reaction',
+      msg_id: s(data.msg_id),
+      emoji: s(data.emoji),
+      from_session: s(data.from_session),
+      from_name: s(data.from_name),
+      ts: s(data.ts),
+    },
+  }
+}
+
+function buildReadEvent(data: Record<string, unknown>): AckEvent {
+  const reader = s(data.by_name) || s(data.by_session).slice(0, 8) || 'unknown'
+  return {
+    content: `${reader} read msg_id=${s(data.msg_id)}`,
+    meta: {
+      source: 'choros-read',
+      msg_id: s(data.msg_id),
+      by_session: s(data.by_session),
+      by_name: s(data.by_name),
+      read_at: s(data.read_at),
+    },
+  }
+}
+
+function buildDeliveryEvent(data: Record<string, unknown>): AckEvent {
+  const recipient = s(data.to_name) || s(data.to_session)
+  const delivered = data.status === 'delivered'
+  return {
+    content: delivered
+      ? `Delivered to ${recipient}: msg_id=${s(data.msg_id)}`
+      : `Dropped — recipient bun could not confirm receipt at ${recipient}: msg_id=${s(data.msg_id)}`,
+    meta: {
+      source: 'choros-ack',
+      msg_id: s(data.msg_id),
+      status: s(data.status),
+      to_session: s(data.to_session),
+      to_name: s(data.to_name),
+      verified_at: s(data.verified_at),
+    },
+  }
+}
+
+function classifyAckFilename(filename: string): AckKind | null {
+  if (filename.startsWith('.')) return null
+  if (filename.endsWith('.react')) return 'react'
+  if (filename.endsWith('.read')) return 'read'
+  if (filename.endsWith('.ack') || filename.endsWith('.dropped')) return 'ack'
+  return null
+}
+
+function buildAckEvent(kind: AckKind, data: Record<string, unknown>): AckEvent {
+  switch (kind) {
+    case 'react':
+      return buildReactionEvent(data)
+    case 'read':
+      return buildReadEvent(data)
+    case 'ack':
+      return buildDeliveryEvent(data)
+  }
+}
+
 /**
  * Emit a delivery / read / reaction ack file as a channel event to OUR agent.
  *
@@ -24,11 +105,8 @@ export async function emitAck(
   myAcksDir: string,
   filename: string,
 ): Promise<'emitted' | 'skipped' | 'timeout'> {
-  if (filename.startsWith('.')) return 'skipped'
-  const isAck = filename.endsWith('.ack') || filename.endsWith('.dropped')
-  const isReact = filename.endsWith('.react')
-  const isRead = filename.endsWith('.read')
-  if (!isAck && !isReact && !isRead) return 'skipped'
+  const kind = classifyAckFilename(filename)
+  if (kind === null) return 'skipped'
   const path = join(myAcksDir, filename)
   let raw: string
   try {
@@ -45,47 +123,7 @@ export async function emitAck(
     return 'skipped'
   }
 
-  let meta: Record<string, string>
-  let content: string
-  if (isReact) {
-    meta = {
-      source: 'choros-reaction',
-      msg_id: String(data.msg_id ?? ''),
-      emoji: String(data.emoji ?? ''),
-      from_session: String(data.from_session ?? ''),
-      from_name: String(data.from_name ?? ''),
-      ts: String(data.ts ?? ''),
-    }
-    const reactor =
-      data.from_name || (data.from_session ? String(data.from_session).slice(0, 8) : 'unknown')
-    content = `${reactor} reacted ${data.emoji} to msg_id=${data.msg_id}`
-  } else if (isRead) {
-    meta = {
-      source: 'choros-read',
-      msg_id: String(data.msg_id ?? ''),
-      by_session: String(data.by_session ?? ''),
-      by_name: String(data.by_name ?? ''),
-      read_at: String(data.read_at ?? ''),
-    }
-    const reader =
-      data.by_name || (data.by_session ? String(data.by_session).slice(0, 8) : 'unknown')
-    content = `${reader} read msg_id=${data.msg_id}`
-  } else {
-    meta = {
-      source: 'choros-ack',
-      msg_id: String(data.msg_id ?? ''),
-      status: String(data.status ?? ''),
-      to_session: String(data.to_session ?? ''),
-      to_name: String(data.to_name ?? ''),
-      verified_at: String(data.verified_at ?? ''),
-    }
-    const recipient = data.to_name || data.to_session
-    content =
-      data.status === 'delivered'
-        ? `Delivered to ${recipient}: msg_id=${data.msg_id}`
-        : `Dropped — recipient bun could not confirm receipt at ${recipient}: msg_id=${data.msg_id}`
-  }
-
+  const { content, meta } = buildAckEvent(kind, data)
   const result = await withTimeout(
     ctx,
     ctx.mcp.notify('notifications/claude/channel', { content, meta }),

@@ -9,6 +9,11 @@ import type { InboxMessage } from './inbox.ts'
  *  resolution. */
 export class AskRegistry {
   private waiters = new Map<string, (msg: InboxMessage) => void>()
+  private readonly stderr: (line: string) => void
+
+  constructor(stderr: (line: string) => void = () => undefined) {
+    this.stderr = stderr
+  }
 
   register(msgId: string, onReply: (msg: InboxMessage) => void): void {
     this.waiters.set(msgId, onReply)
@@ -35,8 +40,7 @@ export class AskRegistry {
       cb(msg)
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e)
-      // biome-ignore lint/suspicious/noConsole: registry has no ctx.proc handle; this is the failsafe path
-      console.error(`[choros] ask waiter for ${msg.in_reply_to} threw: ${m}`)
+      this.stderr(`[choros] ask waiter for ${msg.in_reply_to} threw: ${m}\n`)
     }
     return true
   }

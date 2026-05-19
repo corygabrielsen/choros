@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  WEDGE_TIMEOUT_THRESHOLD,
   atomicWrite,
   pushChannelNotification,
   verifyJsonlReceipt,
+  WEDGE_TIMEOUT_THRESHOLD,
   withTimeout,
   writeAckToSender,
 } from '../src/delivery.ts'
@@ -23,7 +23,7 @@ describe('withTimeout', () => {
 
   test("returns 'timeout' for a hanging promise (EPIPE simulation)", async () => {
     const ctx = fakeContext()
-    const hanging = new Promise<void>(() => {})
+    const hanging = new Promise<void>(() => undefined)
     const racing = withTimeout(ctx, hanging, 100, 'test')
     ctx.clock.advance(101)
     expect(await racing).toBe('timeout')
@@ -46,7 +46,7 @@ describe('withTimeout', () => {
   test('clears timer on timeout', async () => {
     const clock = new FakeClock()
     const ctx = fakeContext({ clock })
-    const racing = withTimeout(ctx, new Promise<void>(() => {}), 100, 'test')
+    const racing = withTimeout(ctx, new Promise<void>(() => undefined), 100, 'test')
     clock.advance(101)
     await racing
     expect(clock.pendingTimers()).toBe(0)

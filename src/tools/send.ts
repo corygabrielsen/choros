@@ -36,8 +36,8 @@ export interface SendResult {
   recipient_name: string | null
   verify_path: string
   live_status: string
-  live_age_ms?: number
-  last_agent_turn_age_ms?: number
+  live_age_ms?: number | undefined
+  last_agent_turn_age_ms?: number | undefined
 }
 
 /**

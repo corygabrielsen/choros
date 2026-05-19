@@ -237,7 +237,7 @@ export async function writeAckToSender(
     // "[object Object]" and corrupt routing.
     return 'skipped'
   }
-  if (!fromSession || !msgId) return 'skipped'
+  if (!(fromSession && msgId)) return 'skipped'
   if (fromSession === targets.me) return 'skipped'
   // Sanitize before path construction: from_session arrives from inbound msg
   // body, can be attacker-controlled, must not contain ../ or path separators.

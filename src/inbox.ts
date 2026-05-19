@@ -2,9 +2,9 @@ import { join } from 'node:path'
 import type { AskRegistry } from './ask-registry.ts'
 import {
   JSONL_VERIFY_TIMEOUT_MS,
-  type WedgeState,
   pushChannelNotification,
   verifyJsonlReceipt,
+  type WedgeState,
   writeAckToSender,
 } from './delivery.ts'
 import type { Context } from './effects.ts'
@@ -183,25 +183,16 @@ export async function emitInboxMessage(
   }
 }
 
-async function emitInboxMessageInner(
-  ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env' | 'mcp'>,
-  targets: InboxTargets,
-  wedgeState: WedgeState,
-  emittedDroppedAcks: Set<string>,
-  filename: string,
-  src: string,
-  sidecar: string,
-  askRegistry?: AskRegistry,
-): Promise<EmitResult> {
-  const data = await readInboxMessage(ctx, src)
-  if (!data) return { status: 'skipped' }
-  if (askRegistry) askRegistry.notifyIfWaiting(data)
-  void filename
-  // Stringify only fields known to be string-shaped. Non-string fields
-  // are not coerced (would yield "[object Object]" and corrupt meta);
-  // they are dropped from the meta entirely.
-  const safeString = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
-  const msgId = safeString(data.id) ?? ''
+function safeString(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined
+}
+
+function buildInboxMeta(
+  data: InboxMessage,
+  me: string,
+  myName: string,
+  msgId: string,
+): Record<string, string> {
   const meta: Record<string, string> = {
     source: 'choros',
     msg_id: msgId,
@@ -220,12 +211,94 @@ async function emitInboxMessageInner(
   if (data.broadcast) meta.broadcast = 'true'
   if (data.act) meta.act = data.act
   if (Array.isArray(data.mentions) && data.mentions.length > 0) {
-    const mentionedMe = data.mentions.some(
-      m => m === targets.me || (typeof m === 'string' && m === targets.myName),
-    )
+    const mentionedMe = data.mentions.some(m => m === me || (typeof m === 'string' && m === myName))
     if (mentionedMe) meta.mentioned_me = 'true'
     meta.mentions = data.mentions.join(',')
   }
+  return meta
+}
+
+async function recordDroppedAck(
+  ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
+  targets: InboxTargets,
+  emittedDroppedAcks: Set<string>,
+  msgId: string,
+  data: InboxMessage,
+): Promise<void> {
+  if (emittedDroppedAcks.has(msgId)) return
+  emittedDroppedAcks.add(msgId)
+  // Bound the dedup set so a long-running bun under sustained wedge
+  // doesn't grow memory unboundedly. Drop the oldest entry. Worst case
+  // on overflow: a long-dead msg's dropped-ack re-fires once, which is
+  // acceptable noise vs. an unbounded leak.
+  while (emittedDroppedAcks.size > DROPPED_ACK_DEDUP_CAP) {
+    const oldest = emittedDroppedAcks.values().next().value
+    if (oldest !== undefined) emittedDroppedAcks.delete(oldest)
+  }
+  try {
+    await writeAckToSender(
+      ctx,
+      { stateRoot: targets.stateRoot, me: targets.me, myName: targets.myName },
+      data,
+      'dropped',
+      ctx.proc.pid(),
+    )
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    ctx.proc.stderr(`[choros] .dropped ack write failed: ${m}\n`)
+  }
+}
+
+async function recordDelivered(
+  ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
+  targets: InboxTargets,
+  sidecar: string,
+  data: InboxMessage,
+): Promise<void> {
+  const marker = JSON.stringify({
+    pushed_at: ctx.clock.nowIso(),
+    verified_at: ctx.clock.nowIso(),
+    pid: ctx.proc.pid(),
+  })
+  try {
+    await ctx.fs.writeFile(sidecar, marker)
+  } catch (e: unknown) {
+    // If we can't write .seen, the next sweep will re-emit the message.
+    // The push already happened, so the recipient saw it; only the
+    // sender's verify_path stat lies until the underlying fs problem
+    // is resolved.
+    const m = e instanceof Error ? e.message : String(e)
+    ctx.proc.stderr(`[choros] .seen sidecar write failed for ${sidecar}: ${m}\n`)
+  }
+  try {
+    await writeAckToSender(
+      ctx,
+      { stateRoot: targets.stateRoot, me: targets.me, myName: targets.myName },
+      data,
+      'delivered',
+      ctx.proc.pid(),
+    )
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    ctx.proc.stderr(`[choros] .ack write failed: ${m}\n`)
+  }
+}
+
+async function emitInboxMessageInner(
+  ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env' | 'mcp'>,
+  targets: InboxTargets,
+  wedgeState: WedgeState,
+  emittedDroppedAcks: Set<string>,
+  _filename: string,
+  src: string,
+  sidecar: string,
+  askRegistry?: AskRegistry,
+): Promise<EmitResult> {
+  const data = await readInboxMessage(ctx, src)
+  if (!data) return { status: 'skipped' }
+  if (askRegistry) askRegistry.notifyIfWaiting(data)
+  const msgId = safeString(data.id) ?? ''
+  const meta = buildInboxMeta(data, targets.me, targets.myName, msgId)
 
   const push = await pushChannelNotification(
     ctx,
@@ -243,60 +316,11 @@ async function emitInboxMessageInner(
     ctx.proc.stderr(
       `[choros] push resolved but msg_id=${msgId} NOT in own JSONL — withholding .seen; sweep retries.\n`,
     )
-    if (!emittedDroppedAcks.has(msgId)) {
-      emittedDroppedAcks.add(msgId)
-      // Bound the dedup set so a long-running bun under sustained wedge
-      // doesn't grow memory unboundedly. Drop the oldest entry. Worst
-      // case on overflow: a long-dead msg's dropped-ack re-fires once,
-      // which is acceptable noise vs. an unbounded leak.
-      while (emittedDroppedAcks.size > DROPPED_ACK_DEDUP_CAP) {
-        const oldest = emittedDroppedAcks.values().next().value
-        if (oldest !== undefined) emittedDroppedAcks.delete(oldest)
-      }
-      try {
-        await writeAckToSender(
-          ctx,
-          { stateRoot: targets.stateRoot, me: targets.me, myName: targets.myName },
-          data,
-          'dropped',
-          ctx.proc.pid(),
-        )
-      } catch (e: unknown) {
-        const m = e instanceof Error ? e.message : String(e)
-        ctx.proc.stderr(`[choros] .dropped ack write failed: ${m}\n`)
-      }
-    }
+    await recordDroppedAck(ctx, targets, emittedDroppedAcks, msgId, data)
     return { status: 'dropped' }
   }
   emittedDroppedAcks.delete(msgId)
-  const marker = JSON.stringify({
-    pushed_at: ctx.clock.nowIso(),
-    verified_at: ctx.clock.nowIso(),
-    pid: ctx.proc.pid(),
-  })
-  try {
-    await ctx.fs.writeFile(sidecar, marker)
-  } catch (e: unknown) {
-    // If we can't write .seen, the next sweep will re-emit the message.
-    // Surface the failure so it's visible — otherwise an unwritable inbox
-    // dir would loop silently. The msg push already happened, so the
-    // recipient saw it; only the sender's verify_path stat lies until
-    // the underlying fs problem is resolved.
-    const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros] .seen sidecar write failed for ${sidecar}: ${m}\n`)
-  }
-  try {
-    await writeAckToSender(
-      ctx,
-      { stateRoot: targets.stateRoot, me: targets.me, myName: targets.myName },
-      data,
-      'delivered',
-      ctx.proc.pid(),
-    )
-  } catch (e: unknown) {
-    const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros] .ack write failed: ${m}\n`)
-  }
+  await recordDelivered(ctx, targets, sidecar, data)
   return { status: 'emitted' }
 }
 

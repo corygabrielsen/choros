@@ -1,8 +1,8 @@
 import type { AskRegistry } from '../ask-registry.ts'
 import type { Context } from '../effects.ts'
 import { isSelf, resolveRecipient } from '../identity.ts'
-import { type InboxMessage, asStringField } from '../inbox.ts'
-import { type SendTargets, handleSend } from './send.ts'
+import { asStringField, type InboxMessage } from '../inbox.ts'
+import { handleSend, type SendTargets } from './send.ts'
 
 /** Default timeout for {@link handleAsk} when no `timeout_ms` is given. */
 export const DEFAULT_ASK_TIMEOUT_MS = 60_000

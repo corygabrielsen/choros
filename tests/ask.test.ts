@@ -17,12 +17,12 @@ const targets = {
 describe('AskRegistry', () => {
   test('notifyIfWaiting resolves the matching waiter exactly once', () => {
     const reg = new AskRegistry()
-    let resolved: string | null = null
+    const captured: { value: string | null } = { value: null }
     reg.register('q1', m => {
-      resolved = m.body ?? null
+      captured.value = m.body ?? null
     })
     expect(reg.notifyIfWaiting({ id: 'r1', in_reply_to: 'q1', body: 'answer' })).toBe(true)
-    expect(resolved).toBe('answer')
+    expect(captured.value).toBe('answer')
     expect(reg.pendingCount()).toBe(0)
     // Second matching reply: no waiter to fire
     expect(reg.notifyIfWaiting({ id: 'r2', in_reply_to: 'q1', body: 'late' })).toBe(false)
@@ -30,14 +30,14 @@ describe('AskRegistry', () => {
 
   test('ignores inbound without in_reply_to', () => {
     const reg = new AskRegistry()
-    reg.register('q1', () => {})
+    reg.register('q1', () => undefined)
     expect(reg.notifyIfWaiting({ id: 'r1', body: 'unrelated' })).toBe(false)
     expect(reg.pendingCount()).toBe(1)
   })
 
   test('unregister removes the waiter', () => {
     const reg = new AskRegistry()
-    reg.register('q1', () => {})
+    reg.register('q1', () => undefined)
     reg.unregister('q1')
     expect(reg.pendingCount()).toBe(0)
   })
@@ -111,7 +111,7 @@ describe('handleAsk', () => {
     ).rejects.toThrow(/positive/)
   })
 
-  test('callback throw does not unwind notifyIfWaiting', async () => {
+  test('callback throw does not unwind notifyIfWaiting', () => {
     const reg = new AskRegistry()
     reg.register('q', () => {
       throw new Error('boom')

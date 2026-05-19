@@ -21,8 +21,8 @@ export interface DoctorPeer {
   session_id: string
   display_name: string | null
   classification: Classification
-  heartbeat_age_ms?: number
-  last_agent_turn_age_ms?: number
+  heartbeat_age_ms?: number | undefined
+  last_agent_turn_age_ms?: number | undefined
   wedged: boolean
   bun_alive: boolean
 }

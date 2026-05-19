@@ -100,10 +100,10 @@ export function classifyPeerHeartbeat(
  */
 export interface RecipientHealth {
   status: 'live' | 'stale' | 'wedged' | 'unknown'
-  age_ms?: number
-  last_agent_turn_age_ms?: number
-  wedge_detected_at?: string
-  wedge_pending_msg_ids?: string[]
+  age_ms?: number | undefined
+  last_agent_turn_age_ms?: number | undefined
+  wedge_detected_at?: string | undefined
+  wedge_pending_msg_ids?: string[] | undefined
 }
 
 /** Probe a recipient's health for inclusion in send-tool response. Returns

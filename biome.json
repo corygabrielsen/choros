@@ -1,8 +1,7 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
   "files": {
-    "include": ["src/**/*.ts", "tests/**/*.ts"],
-    "ignore": ["node_modules/**", "dist/**", "*.log"]
+    "includes": ["**/src/**/*.ts", "**/tests/**/*.ts", "!**/node_modules", "!**/dist", "!**/*.log"]
   },
   "formatter": {
     "enabled": true,
@@ -23,18 +22,62 @@
     "enabled": true,
     "rules": {
       "recommended": true,
-      "suspicious": {
-        "noExplicitAny": "warn",
-        "noConsole": "off"
-      },
-      "style": {
-        "useImportType": "error",
-        "useNodejsImportProtocol": "error"
+      "complexity": {
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": { "maxAllowedComplexity": 25 }
+        },
+        "noUselessStringConcat": "error",
+        "useSimplifiedLogicExpression": "error"
       },
       "correctness": {
-        "noUnusedVariables": "error",
-        "noUnusedImports": "error"
+        "noUndeclaredVariables": "error",
+        "noUnusedFunctionParameters": "error",
+        "noUnusedImports": "error",
+        "noUnusedPrivateClassMembers": "error",
+        "noUnusedVariables": "error"
+      },
+      "performance": {
+        "noAccumulatingSpread": "error",
+        "noDelete": "error"
+      },
+      "style": {
+        "noNegationElse": "error",
+        "noParameterAssign": "error",
+        "noUselessElse": "error",
+        "useConsistentArrayType": { "level": "error", "options": { "syntax": "shorthand" } },
+        "useConst": "error",
+        "useImportType": "error",
+        "useNodejsImportProtocol": "error",
+        "useShorthandAssign": "error",
+        "useTemplate": "error"
+      },
+      "suspicious": {
+        "noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
+        "noEmptyBlockStatements": "error",
+        "noExplicitAny": "error",
+        "noMisrefactoredShorthandAssign": "error",
+        "useAwait": "error"
       }
     }
-  }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/tests/fakes/**/*.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "useAwait": "off"
+          }
+        }
+      }
+    }
+  ]
 }

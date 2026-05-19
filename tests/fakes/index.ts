@@ -260,7 +260,7 @@ export class FakeMcp implements Mcp {
   rejectWith: Error | null = null
 
   async notify(method: string, params: unknown): Promise<void> {
-    if (this.hangForever) return new Promise(() => {})
+    if (this.hangForever) return new Promise(() => undefined)
     if (this.rejectWith) throw this.rejectWith
     this.notifications.push({ method, params })
   }

@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  BODY_CAP_BYTES,
-  SPEECH_ACTS,
   archiveInboxMessage,
+  BODY_CAP_BYTES,
   emitInboxMessage,
   enforceBodyCap,
   readInboxMessage,
+  SPEECH_ACTS,
   validateSpeechAct,
 } from '../src/inbox.ts'
 import { fakeContext } from './fakes/index.ts'

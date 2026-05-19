@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { PUSH_TIMEOUT_MS, atomicWrite, withTimeout } from './delivery.ts'
+import { atomicWrite, PUSH_TIMEOUT_MS, withTimeout } from './delivery.ts'
 import type { Context } from './effects.ts'
 import { isLivePeer } from './health.ts'
 import { isSelf, listKnownInstances } from './identity.ts'
@@ -148,9 +148,7 @@ export async function emitPresence(
 ): Promise<'emitted' | 'skipped' | 'self' | 'timeout'> {
   if (filename.startsWith('.')) return 'skipped'
   if (
-    !filename.endsWith('.hello') &&
-    !filename.endsWith('.goodbye') &&
-    !filename.endsWith('.rename')
+    !(filename.endsWith('.hello') || filename.endsWith('.goodbye') || filename.endsWith('.rename'))
   ) {
     return 'skipped'
   }

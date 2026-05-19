@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  LIVE_MAX_AGE_MS,
   classifyPeerHeartbeat,
   isLivePeer,
+  LIVE_MAX_AGE_MS,
   recipientLiveness,
 } from '../src/health.ts'
 import { fakeContext } from './fakes/index.ts'

@@ -9,8 +9,8 @@ import type { WedgeState } from './delivery.ts'
 import { type Context, type Mcp, realContext } from './effects.ts'
 import {
   type AgentState,
-  HEARTBEAT_INTERVAL_MS,
   buildHeartbeat,
+  HEARTBEAT_INTERVAL_MS,
   readAgentState,
   writeHeartbeat,
 } from './heartbeat.ts'
@@ -100,7 +100,7 @@ await takeLock()
 const wedge: WedgeState = { consecutiveTimeouts: 0 }
 const droppedAcksEmitted = new Set<string>()
 const inFlightEmits = new Set<string>()
-const askRegistry = new AskRegistry()
+const askRegistry = new AskRegistry(line => ctx.proc.stderr(line))
 const nameCache = createNameCache()
 let myName = await resolveMyNameCached(ctx, identity, PROJECTS_ROOT, nameCache)
 // Inherit any status/intent the previous bun lifetime persisted, so a
@@ -528,7 +528,7 @@ let shutdownAsyncPromise: Promise<void> | null = null
 // Broadcasts a goodbye to live peers with a hard deadline so a wedged peer
 // doesn't block us indefinitely. Recomputes targets so the freshest myName
 // is broadcast (the heartbeat tick may have updated it since boot).
-async function shutdownAsync(): Promise<void> {
+function shutdownAsync(): Promise<void> {
   // Idempotent across concurrent signals. The first SIGINT/SIGTERM
   // installs the promise; later signals await the same one rather than
   // racing on broadcastPresence + re-running the timeout.

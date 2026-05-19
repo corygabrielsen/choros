@@ -118,14 +118,13 @@ describe('broadcastPresence', () => {
     expect((await ctx.fs.readdir(`${STATE}/${p2}/presence`)).length).toBe(1)
   })
 
-  test('skips dead-bun peers (v0.17 invariant)', async () => {
+  test('skips dead-bun peers', async () => {
     const ctx = fakeContext()
     const dead = '44444444-4444-4444-4444-444444444444'
     await seedDeadPeer(ctx, dead, 9999)
     const peers = await broadcastPresence(ctx, targets, 'hello')
     expect(peers).toEqual([])
-    // Dead peer's presence dir should remain empty
-    const entries = await ctx.fs.readdir(`${STATE}/${dead}`).catch(() => [])
+    const entries = await ctx.fs.readdir(`${STATE}/${dead}`).catch((): string[] => [])
     expect(entries.includes('presence')).toBe(false)
   })
 })

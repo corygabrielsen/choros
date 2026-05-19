@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  UUID_RE,
   createNameCache,
   isSelf,
   listKnownInstances,
@@ -10,6 +9,7 @@ import {
   resolveMyNameCached,
   resolveRecipient,
   sanitizeId,
+  UUID_RE,
 } from '../src/identity.ts'
 import { fakeContext } from './fakes/index.ts'
 

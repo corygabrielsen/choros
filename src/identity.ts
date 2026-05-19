@@ -209,7 +209,7 @@ export async function readDisplayNameForJsonl(
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]
     if (!line) continue
-    if (!line.includes('"custom-title"') && !line.includes('"ai-title"')) continue
+    if (!(line.includes('"custom-title"') || line.includes('"ai-title"'))) continue
     try {
       const ev = JSON.parse(line)
       if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {

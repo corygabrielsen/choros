@@ -2,9 +2,8 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { sanitizeId } from '../identity.ts'
-import { type InboxMessage, asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
+import { asStringField, enforceBodyCap, type InboxMessage, validateSpeechAct } from '../inbox.ts'
 import {
-  type ThreadSummary,
   addMember,
   appendToThread,
   ensureThread,
@@ -12,6 +11,7 @@ import {
   listThreadsFor,
   readThread,
   removeMember,
+  type ThreadSummary,
 } from '../threads.ts'
 
 /** Paths + identity needed by the thread tool handlers. */
@@ -70,7 +70,7 @@ export async function handleLeaveThread(
  * (most recent first). Each entry includes the root msg_id, optional
  * title, message count, and member count.
  */
-export async function handleListThreads(
+export function handleListThreads(
   ctx: Pick<Context, 'fs'>,
   targets: Pick<ThreadTargets, 'stateRoot' | 'me'>,
 ): Promise<ThreadSummary[]> {

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process'
 import { createReadStream, existsSync, unlinkSync } from 'node:fs'
-import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir, hostname } from 'node:os'
 import { createInterface } from 'node:readline'
 

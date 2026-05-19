@@ -185,7 +185,7 @@ export async function listMembers(
 /** Add a peer to a thread's member set. Serialized per-thread via
  *  {@link serializeOnThread} so concurrent add/remove cannot lose
  *  updates. Idempotent. */
-export async function addMember(
+export function addMember(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
   targets: ThreadTargets,
   rootId: string,
@@ -201,7 +201,7 @@ export async function addMember(
 }
 
 /** Remove a peer from a thread's member set. Idempotent. */
-export async function removeMember(
+export function removeMember(
   ctx: Pick<Context, 'fs' | 'proc'>,
   targets: ThreadTargets,
   rootId: string,
@@ -218,11 +218,11 @@ export async function removeMember(
 /** Compact thread summary returned by {@link listThreadsFor}. */
 export interface ThreadSummary {
   root_msg_id: string
-  title?: string
-  created_at?: string
+  title?: string | undefined
+  created_at?: string | undefined
   message_count: number
   member_count: number
-  last_ts?: string
+  last_ts?: string | undefined
 }
 
 /** List threads `peerId` is a member of, sorted by last activity
