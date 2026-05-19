@@ -39,7 +39,7 @@ import {
 } from '#choros/tools/threads.ts'
 import { setupWatcher, type WatcherHandle } from '#choros/watcher.ts'
 
-const server = new Server({ name: 'choros', version: '0.28.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.29.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -527,7 +527,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
 }
 
 ctx.proc.stderr(
-  `[choros] v0.28 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.29 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )

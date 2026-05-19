@@ -1,6 +1,6 @@
 {
   "name": "choros",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Inter-session messaging and swarm coordination for Claude Code sessions, over MCP + filesystem.",
   "license": "MIT",
   "author": "Cory Gabrielsen",
