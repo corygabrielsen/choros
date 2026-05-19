@@ -1,0 +1,33 @@
+# choros daemon — systemd USER unit
+#
+# Install (per-user, no root needed):
+#   mkdir -p ~/.config/systemd/user
+#   ln -sf $(realpath ~/code/choros/install/choros.service) ~/.config/systemd/user/choros.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now choros
+#
+# Status / logs:
+#   systemctl --user status choros
+#   journalctl --user -u choros -f
+
+[Unit]
+Description=choros daemon — inter-session messaging for Claude Code
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env bun run %h/code/choros/src/daemon/main.ts
+Restart=on-failure
+RestartSec=5
+
+# Sandbox: daemon only needs to read its own source and write its
+# state dir. XDG_STATE_HOME defaults to ~/.local/state under
+# systemd-user.
+Environment=NODE_ENV=production
+
+# Choros runs as a foreground process; let systemd own stdout/stderr.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

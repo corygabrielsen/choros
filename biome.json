@@ -11,6 +11,7 @@
     "lineEnding": "lf"
   },
   "javascript": {
+    "globals": ["Bun"],
     "formatter": {
       "quoteStyle": "single",
       "semicolons": "asNeeded",

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  choros daemon — launchd LaunchAgent
+
+  Install (per-user, no sudo needed):
+    mkdir -p ~/Library/LaunchAgents
+    ln -sf $(realpath ~/code/choros/install/com.choros.daemon.plist) \
+           ~/Library/LaunchAgents/com.choros.daemon.plist
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.choros.daemon.plist
+
+  Status / logs:
+    launchctl print gui/$UID/com.choros.daemon
+    tail -f ~/Library/Logs/choros/daemon.{out,err}.log
+
+  Replace HOME_PLACEHOLDER below with your home dir before the first
+  bootstrap (launchd plists don't expand $HOME). The install script
+  below the install line above should do the substitution.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.choros.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>bun</string>
+        <string>run</string>
+        <string>HOME_PLACEHOLDER/code/choros/src/daemon/main.ts</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/Library/Logs/choros/daemon.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/Library/Logs/choros/daemon.err.log</string>
+</dict>
+</plist>
