@@ -10,9 +10,13 @@ export interface SubscribeTargets {
 async function readSubscriptions(ctx: Pick<Context, 'fs'>, path: string): Promise<Set<string>> {
   try {
     const raw = await ctx.fs.readFile(path)
-    const arr = JSON.parse(raw) as unknown
-    if (!Array.isArray(arr)) return new Set()
-    return new Set(arr.filter((x): x is string => typeof x === 'string'))
+    const parsed: unknown = JSON.parse(raw)
+    // Accept only the canonical shape (array of strings). Older or
+    // foreign formats — e.g. `{ topics: [...] }` — collapse to an
+    // empty subscription set rather than throwing or partially
+    // accepting a malformed schema.
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((x): x is string => typeof x === 'string'))
   } catch {
     return new Set()
   }

@@ -156,10 +156,24 @@ export async function findJsonlForSession(
   if (ctx.fs.existsSync(fast)) return fast
   try {
     const projects = await ctx.fs.readdir(projectsRoot)
+    // When the same session id exists in multiple project dirs (rare
+    // but possible if the user copied state, or two cwds share a UUID),
+    // pick the newest. readdir order is filesystem-dependent and would
+    // otherwise be non-deterministic across reboots.
+    const candidates: Array<{ path: string; mtime: number }> = []
     for (const p of projects) {
       const candidate = join(projectsRoot, p, `${sessionId}.jsonl`)
-      if (ctx.fs.existsSync(candidate)) return candidate
+      if (!ctx.fs.existsSync(candidate)) continue
+      try {
+        const s = await ctx.fs.stat(candidate)
+        candidates.push({ path: candidate, mtime: s.mtimeMs })
+      } catch {
+        /* skip — stat failed mid-iteration */
+      }
     }
+    if (candidates.length === 0) return null
+    candidates.sort((a, b) => b.mtime - a.mtime)
+    return candidates[0]?.path ?? null
   } catch {
     /* projects root missing — return null */
   }

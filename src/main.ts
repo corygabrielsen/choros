@@ -33,7 +33,7 @@ import {
   handleSendToThread,
 } from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.27.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.28.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -410,20 +410,48 @@ try {
 } catch {
   /* dir doesn't exist yet — created above */
 }
-const ackWatcher = ctx.spawner.spawn('inotifywait', [
-  '-m',
-  '-q',
-  '-e',
-  'close_write,moved_to',
-  '--format',
-  '%f',
-  MY_ACKS,
-])
-ackWatcher.onStdout(chunk => {
-  for (const filename of chunk.split('\n').filter(Boolean)) {
-    void emitAck(ctx, MY_ACKS, filename)
-  }
-})
+// inotifywait can die under load (watch-table exhaustion, fs unmount).
+// The ack watcher is non-critical (inbox + presence are the load-bearing
+// ones) but if it stays dead silently, choros-ack/read/reaction events
+// stop firing and the agent doesn't learn delivery state. Respawn on
+// non-shutdown exit, bounded to a few attempts so we don't loop forever
+// against a permanent fs error.
+let ackWatcherRespawns = 0
+const ACK_WATCHER_RESPAWN_CAP = 5
+function spawnAckWatcher(): ReturnType<typeof ctx.spawner.spawn> {
+  const w = ctx.spawner.spawn('inotifywait', [
+    '-m',
+    '-q',
+    '-e',
+    'close_write,moved_to',
+    '--format',
+    '%f',
+    MY_ACKS,
+  ])
+  w.onStdout(chunk => {
+    for (const filename of chunk.split('\n').filter(Boolean)) {
+      void emitAck(ctx, MY_ACKS, filename)
+    }
+  })
+  w.onExit(code => {
+    if (shuttingDown) return
+    ackWatcherRespawns++
+    if (ackWatcherRespawns > ACK_WATCHER_RESPAWN_CAP) {
+      ctx.proc.stderr(
+        `[choros] ack watcher died (code=${code}); ${ACK_WATCHER_RESPAWN_CAP}+ respawn attempts exhausted, giving up\n`,
+      )
+      return
+    }
+    ctx.proc.stderr(
+      `[choros] ack watcher exited (code=${code}); respawning (attempt ${ackWatcherRespawns})\n`,
+    )
+    const fresh = spawnAckWatcher()
+    const idx = watchers.indexOf(w)
+    if (idx >= 0) watchers[idx] = fresh
+  })
+  return w
+}
+const ackWatcher = spawnAckWatcher()
 
 // Periodic re-emit sweep. Inbox files that timed out (push_timeout or
 // JSONL-probe miss) still need redelivery; the inotify watcher fires
@@ -540,7 +568,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.27 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.28 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )
