@@ -5,6 +5,13 @@ export interface SetStateTargets {
   agentStatePath: string
 }
 
+/**
+ * Set this session's ambient status, visible to peers via `doctor`.
+ *
+ * @remarks
+ * Empty `text` clears the status. Persisted to `.agent_state`; merged
+ * into the next heartbeat tick.
+ */
 export async function handleSetStatus(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
   targets: SetStateTargets,
@@ -16,6 +23,13 @@ export async function handleSetStatus(
   return { status: next.status ?? null }
 }
 
+/**
+ * Set this session's ambient intent (the bigger goal), visible to peers
+ * via `doctor`.
+ *
+ * @remarks
+ * Empty `text` clears the intent. Persisted to `.agent_state`.
+ */
 export async function handleSetIntent(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
   targets: SetStateTargets,

@@ -16,6 +16,19 @@ export interface ReactTargets {
   myName: string
 }
 
+/**
+ * React to a received message with an emoji.
+ *
+ * @remarks
+ * Drops a `.react` file into the sender's `sent_acks/` dir; the sender's
+ * bun (via its `sent_acks` inotify watcher) surfaces a
+ * `choros-reaction` channel event to the original sender's agent.
+ * Refuses reactions to one's own messages.
+ *
+ * @throws When any required field is missing, when `msg_id` or
+ *   `from_session` fails sanitization, or when the sender resolves to
+ *   this session.
+ */
 export async function handleReact(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
   targets: ReactTargets,

@@ -43,6 +43,15 @@ async function countUnreadInbox(ctx: Pick<Context, 'fs'>, inboxDir: string): Pro
   }
 }
 
+/**
+ * Diagnostic snapshot of this session and every known peer.
+ *
+ * @remarks
+ * For each peer: heartbeat age, last-agent-turn age, wedge state,
+ * bun-pid-alive, and classification (`live` / `paused` / `wedged` /
+ * `stale` / `dead` / `none`). Self is excluded from the `peers` list.
+ * Per-peer probes are parallelized.
+ */
 export async function handleDoctor(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
   targets: DoctorTargets,

@@ -36,6 +36,21 @@ export interface SendResult {
   last_agent_turn_age_ms?: number
 }
 
+/**
+ * Send a message to a peer.
+ *
+ * @remarks
+ * Resolves `to` against display names, session UUIDs, and UUID prefixes;
+ * ambiguity is broken by most-recently-active. Writes to the sender's
+ * `sent/` archive and atomically to the recipient's `inbox/`. The result
+ * includes a `verify_path` (where the `.seen` sidecar will land on
+ * JSONL-confirmed delivery) and a `live_status` describing recipient
+ * health at send time.
+ *
+ * @throws When `to` or `body` is missing, when `body` exceeds the body
+ *   cap, when `act` is not in the {@link SPEECH_ACTS} taxonomy, or when
+ *   the resolved recipient is this session itself.
+ */
 export async function handleSend(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
   targets: SendTargets,

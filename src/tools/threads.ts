@@ -21,6 +21,16 @@ export interface ThreadTargets {
   mySentDir: string
 }
 
+/**
+ * Subscribe this session to a thread and return the message backlog.
+ *
+ * @remarks
+ * The thread is identified by its root msg_id. Joining an unknown
+ * thread creates an empty one with this session as the sole member —
+ * later writers can join the same id and the conversation begins.
+ *
+ * @throws When `thread_id` is empty or fails sanitization.
+ */
 export async function handleJoinThread(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
   targets: ThreadTargets,
@@ -34,6 +44,14 @@ export async function handleJoinThread(
   return { thread_id: t, members, backlog }
 }
 
+/**
+ * Remove this session from a thread's member list.
+ *
+ * @remarks
+ * Idempotent — removing a session that is not a member is a no-op.
+ * Existing messages in the thread remain on disk; the thread is not
+ * deleted.
+ */
 export async function handleLeaveThread(
   ctx: Pick<Context, 'fs' | 'proc'>,
   targets: ThreadTargets,
@@ -46,6 +64,11 @@ export async function handleLeaveThread(
   return { thread_id: t, members }
 }
 
+/**
+ * List threads this session is a member of, sorted by last activity
+ * (most recent first). Each entry includes the root msg_id, optional
+ * title, message count, and member count.
+ */
 export async function handleListThreads(
   ctx: Pick<Context, 'fs'>,
   targets: Pick<ThreadTargets, 'stateRoot' | 'me'>,

@@ -25,6 +25,18 @@ export interface PublishResult {
   delivered_to: string[]
 }
 
+/**
+ * Publish a message to every peer subscribed to a topic.
+ *
+ * @remarks
+ * Subscribers are determined per peer via `listSubscribers`. Self is
+ * excluded via three-layer {@link isSelf}, even if this session has
+ * subscribed to the same topic. Recipients receive the message as a
+ * standard `choros` channel event with an extra `topic` meta field.
+ *
+ * @throws When `topic` or `body` is missing, when `body` exceeds the
+ *   body cap, or when `act` is not in the {@link SPEECH_ACTS} taxonomy.
+ */
 export async function handlePublish(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
   targets: PublishTargets,

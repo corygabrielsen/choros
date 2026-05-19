@@ -3,11 +3,25 @@ import type { Context } from './effects.ts'
 import { sanitizeId } from './identity.ts'
 import { asStringField } from './inbox.ts'
 
+/** How long a single `mcp.notify` is given to settle before being
+ *  classified as wedged. The SDK can hang forever on EPIPE; this cap
+ *  is the only reason the bun survives a parent-pipe close. */
 export const PUSH_TIMEOUT_MS = 5_000
+
+/** Window within which we expect to see the msg_id appear in the
+ *  recipient's own CC JSONL after `mcp.notify` resolves. A miss after
+ *  this window indicates CC silently dropped the channel push. */
 export const JSONL_VERIFY_TIMEOUT_MS = 5_000
+
+/** Poll cadence for the JSONL append-only probe. */
 export const JSONL_VERIFY_POLL_MS = 250
+
+/** After this many consecutive push timeouts, `.wedged` is written
+ *  so external monitors (doctor, peers) can see the bun is alive but
+ *  its push channel is dropping. */
 export const WEDGE_TIMEOUT_THRESHOLD = 3
 
+/** Outcome of a {@link withTimeout} race. */
 export interface TimeoutResult {
   status: 'ok' | 'timeout'
 }

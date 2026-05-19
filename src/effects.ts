@@ -4,12 +4,22 @@ import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:
 import { homedir, hostname } from 'node:os'
 import { createInterface } from 'node:readline'
 
+/**
+ * Subset of {@link fs.Stats} that choros depends on. Defined as its own
+ * interface so {@link Fs.stat} doesn't expose node-specific types to
+ * downstream modules.
+ */
 export interface StatInfo {
   mtimeMs: number
   isDirectory: boolean
   size: number
 }
 
+/**
+ * Filesystem effects choros depends on. Production wires this to
+ * `node:fs/promises`; tests wire it to `FakeFs` for in-memory verification
+ * with full atomicity assertions.
+ */
 export interface Fs {
   readFile(path: string): Promise<string>
   writeFile(path: string, content: string): Promise<void>
@@ -23,12 +33,25 @@ export interface Fs {
   readLines(path: string): AsyncIterable<string>
 }
 
+/**
+ * Time effects. `setTimeout` returns a handle whose `clear()` removes the
+ * pending callback — used by every timeout path in choros to avoid zombie
+ * timers when the underlying promise settles.
+ */
 export interface Clock {
   nowMs(): number
   nowIso(): string
   setTimeout(fn: () => void, ms: number): { clear(): void }
 }
 
+/**
+ * Process effects: identity, lifecycle, and OS-process queries.
+ *
+ * @remarks
+ * `pidAlive` distinguishes "heartbeat freshly written by a now-dead bun"
+ * from "live bun" — the v0.17 invariant — and is the only Linux-specific
+ * piece of the interface (production implementation reads `/proc/<pid>`).
+ */
 export interface Proc {
   pid(): number
   cwd(): string
@@ -37,20 +60,38 @@ export interface Proc {
   stderr(line: string): void
 }
 
+/** Environment + host metadata, injected so tests can simulate different
+ *  hostnames, home dirs, and env-var fixtures. */
 export interface Env {
   get(name: string): string | undefined
   homedir(): string
   hostname(): string
 }
 
+/**
+ * MCP push channel into the running session's agent.
+ *
+ * @remarks
+ * Production wraps `Server.notification` from the MCP SDK; tests use
+ * `FakeMcp` which can simulate the EPIPE hang (`hangForever`) or
+ * synchronous rejection. The SDK's notification method silently
+ * deadlocks on broken stdio, which is why every call goes through
+ * {@link withTimeout}.
+ */
 export interface Mcp {
   notify(method: string, params: unknown): Promise<void>
 }
 
+/** Child-process spawner. Production uses `node:child_process`; tests
+ *  use `FakeSpawner` to simulate inotifywait emitting filenames on
+ *  demand. */
 export interface Spawner {
   spawn(cmd: string, args: string[]): SpawnedChild
 }
 
+/** A spawned child process — choros only uses inotifywait. Listeners
+ *  are wired via setter callbacks rather than EventEmitter so the
+ *  interface stays node-runtime-agnostic. */
 export interface SpawnedChild {
   pid: number | undefined
   onStdout(handler: (chunk: string) => void): void
@@ -59,6 +100,12 @@ export interface SpawnedChild {
   kill(): void
 }
 
+/**
+ * Bundle of all effects choros's pure modules require. Production
+ * builds this once at boot via {@link realContext}; tests build a
+ * disjoint context per test via `fakeContext()` so concurrent tests
+ * don't share state.
+ */
 export interface Context {
   fs: Fs
   clock: Clock

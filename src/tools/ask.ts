@@ -16,10 +16,24 @@ export type AskResult =
   | { status: 'answered'; reply_msg_id: string; reply_body: string; reply_from: string }
   | { status: 'timeout'; question_msg_id: string }
 
-/** Synchronous ask. Sends a question with act:"QUESTION" and blocks
- *  awaiting an inbound message with in_reply_to:<that msg_id>. Times out
- *  after timeout_ms (default 60s) honestly — caller learns no answer
- *  arrived rather than blocking indefinitely. */
+/**
+ * Send a QUESTION and block until the peer replies (or timeout).
+ *
+ * @remarks
+ * Wraps {@link handleSend} with `act: "QUESTION"`, registers a waiter
+ * keyed by the question's msg_id BEFORE the send writes the inbox file
+ * (otherwise a fast reply could land between send and register and be
+ * lost). The waiter resolves when an inbound message arrives with
+ * `in_reply_to` matching the question's msg_id. On timeout, resolves
+ * to `{ status: 'timeout' }` rather than throwing.
+ *
+ * @throws When `to` or `body` is missing, when `timeout_ms` is
+ *   non-positive or non-numeric, or when the resolved recipient is
+ *   this session.
+ *
+ * @returns `{ status: 'answered', reply_msg_id, reply_body, reply_from }`
+ *   on a matching reply, or `{ status: 'timeout', question_msg_id }`.
+ */
 export async function handleAsk(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
   targets: SendTargets,

@@ -25,6 +25,16 @@ async function writeSubscriptions(
   await atomicWrite(ctx, path, JSON.stringify([...set].sort()))
 }
 
+/**
+ * Subscribe to a topic. Future publishes to that topic will arrive in
+ * this session's inbox.
+ *
+ * @remarks
+ * Subscriptions are persisted to `.subscriptions` via atomic write.
+ * Idempotent — subscribing to the same topic twice is a no-op.
+ *
+ * @throws When `topic` is empty.
+ */
 export async function handleSubscribe(
   ctx: Pick<Context, 'fs' | 'proc'>,
   targets: SubscribeTargets,
@@ -38,6 +48,11 @@ export async function handleSubscribe(
   return { subscribed: [...set].sort() }
 }
 
+/**
+ * Unsubscribe from a topic.
+ *
+ * @throws When `topic` is empty.
+ */
 export async function handleUnsubscribe(
   ctx: Pick<Context, 'fs' | 'proc'>,
   targets: SubscribeTargets,
