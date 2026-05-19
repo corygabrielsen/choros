@@ -211,6 +211,32 @@ export async function findJsonlForSession(
 const DISPLAY_NAME_TAIL_BYTES = 64 * 1024
 const DISPLAY_NAME_MAX_TAIL_BYTES = 1024 * 1024
 
+type TitleScanResult = { customTitle: string } | { aiTitle: string } | null
+
+/** Walk `lines` in reverse looking for the latest custom-title (which
+ *  wins outright) or the latest ai-title (used only as a fallback when
+ *  no custom-title appears in the scanned window). */
+function scanTailLinesForTitle(lines: string[]): TitleScanResult {
+  let aiTitleFallback: string | null = null
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    if (!line) continue
+    if (!(line.includes('"custom-title"') || line.includes('"ai-title"'))) continue
+    try {
+      const ev = JSON.parse(line)
+      if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {
+        return { customTitle: ev.customTitle }
+      }
+      if (aiTitleFallback === null && ev?.type === 'ai-title' && typeof ev.aiTitle === 'string') {
+        aiTitleFallback = ev.aiTitle
+      }
+    } catch {
+      /* skip unparseable line */
+    }
+  }
+  return aiTitleFallback === null ? null : { aiTitle: aiTitleFallback }
+}
+
 export async function readDisplayNameForJsonl(
   ctx: Pick<Context, 'fs'>,
   jsonl: string | null,
@@ -236,27 +262,12 @@ export async function readDisplayNameForJsonl(
     // title further down the tail.
     const lines = chunk.split('\n')
     if (offset > 0 && lines.length > 0) lines.shift()
-    let aiTitleFallback: string | null = null
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i]
-      if (!line) continue
-      if (!(line.includes('"custom-title"') || line.includes('"ai-title"'))) continue
-      try {
-        const ev = JSON.parse(line)
-        if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {
-          return ev.customTitle
-        }
-        if (aiTitleFallback === null && ev?.type === 'ai-title' && typeof ev.aiTitle === 'string') {
-          aiTitleFallback = ev.aiTitle
-        }
-      } catch {
-        /* skip unparseable line */
-      }
-    }
-    if (aiTitleFallback !== null) return aiTitleFallback
-    // No title in this window. If we've already scanned the whole file,
-    // there's nothing to find. Otherwise grow and retry.
-    if (offset === 0) return null
+    const found = scanTailLinesForTitle(lines)
+    if (found && 'customTitle' in found) return found.customTitle
+    if (offset === 0) return found ? found.aiTitle : null
+    // No custom-title in this window. Grow and retry; the previous
+    // ai-title (if any) only counts as fallback after the whole file
+    // is scanned, so it's discarded for the next pass.
     window *= 2
   }
   return null
@@ -390,30 +401,47 @@ export async function listKnownInstances(
   } catch {
     return out
   }
-  for (const id of entries) {
-    if (id.startsWith('.')) continue
-    const dir = join(stateRoot, id)
-    let isDir = false
-    try {
-      isDir = (await ctx.fs.stat(dir)).isDirectory
-    } catch {
-      continue
-    }
-    if (!isDir) continue
-    const looksLikeUuid = UUID_RE.test(id)
-    let name: string | null = null
-    if (looksLikeUuid) {
-      const jsonl = await findJsonlForSession(ctx, projectsRoot, id)
-      name = await readDisplayNameForJsonl(ctx, jsonl)
-    }
-    let lastActive = 0
-    try {
-      const lockSt = await ctx.fs.stat(join(dir, '.lock'))
-      lastActive = Math.max(lastActive, lockSt.mtimeMs)
-    } catch {
-      /* no lock */
-    }
-    out.push({ id, isUuid: looksLikeUuid, name, lastActive })
+  // Per-peer probes are independent: each peer's stat / JSONL lookup /
+  // .lock stat doesn't depend on any other peer's outcome. The previous
+  // sequential `for ... await` made every doctor / broadcast / publish
+  // call O(peers) wall-clock; this parallelizes all of them.
+  const candidates = entries.filter(e => !e.startsWith('.'))
+  const probed = await Promise.all(
+    candidates.map(async (id): Promise<KnownInstance | null> => {
+      const dir = join(stateRoot, id)
+      try {
+        if (!(await ctx.fs.stat(dir)).isDirectory) return null
+      } catch {
+        return null
+      }
+      const looksLikeUuid = UUID_RE.test(id)
+      let name: string | null = null
+      let lastActive = 0
+      const probes: Promise<unknown>[] = []
+      if (looksLikeUuid) {
+        probes.push(
+          (async (): Promise<void> => {
+            const jsonl = await findJsonlForSession(ctx, projectsRoot, id)
+            name = await readDisplayNameForJsonl(ctx, jsonl)
+          })(),
+        )
+      }
+      probes.push(
+        (async (): Promise<void> => {
+          try {
+            const lockSt = await ctx.fs.stat(join(dir, '.lock'))
+            lastActive = lockSt.mtimeMs
+          } catch {
+            /* no lock */
+          }
+        })(),
+      )
+      await Promise.all(probes)
+      return { id, isUuid: looksLikeUuid, name, lastActive }
+    }),
+  )
+  for (const k of probed) {
+    if (k) out.push(k)
   }
   return out
 }
