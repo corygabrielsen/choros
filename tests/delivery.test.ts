@@ -81,23 +81,12 @@ describe('verifyJsonlReceipt (append-only window)', () => {
     expect(await verifyJsonlReceipt(ctx, null, 'msg-1', 100)).toBe(true)
   })
 
-  test('returns true when msg_id appears in bytes appended after probe start', async () => {
-    const ctx = fakeContext()
-    const jsonl = '/state/jsonl'
-    await ctx.fs.writeFile(jsonl, 'pre-existing content with msg-2\n')
-    const probe = verifyJsonlReceipt(ctx, jsonl, 'msg-1', 5000)
-    // Now append a record containing msg-1 so the probe should see it
-    setTimeout(async () => {
-      const cur = await ctx.fs.readFile(jsonl)
-      await ctx.fs.writeFile(jsonl, `${cur}{"msg_id":"msg-1"}\n`)
-    }, 50)
-    // Advance virtual clock past poll cycles
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 10))
-      ctx.clock.advance(300)
-    }
-    expect(await probe).toBe(true)
-  })
+  // Note: the "finds msg_id in appended bytes" positive case is exercised
+  // by the inbox emit integration test, which drives verifyJsonlReceipt
+  // through emitInboxMessage. We intentionally don't try to test it here
+  // in isolation — the only way would be mixing real setTimeout (for the
+  // write) with virtual ctx.clock.advance (for the poll), which produces
+  // a false-confidence race.
 
   test('rejects substring matches in bytes that existed before the probe', async () => {
     const ctx = fakeContext()

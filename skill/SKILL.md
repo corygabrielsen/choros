@@ -54,7 +54,16 @@ Users phrase sends naturally: `send to skills: hello`, `tell tmp foo`, `message 
 
 ### `/choros <to> <body...>` or `/choros send <to> <body...>` — send a message
 
-Call `mcp__choros__send` with `{to, body}`. Optional fields: `reply_budget` (int) and `in_reply_to` (msg_id). The server resolves `to` against display names, session UUIDs, and UUID prefixes; ambiguity is broken by most-recently-active.
+Call `mcp__choros__send` with `{to, body}`. Optional fields: `act` (speech act — see below) and `in_reply_to` (msg_id). The server resolves `to` against display names, session UUIDs, and UUID prefixes; ambiguity is broken by most-recently-active.
+
+**Speech-act tags** carry the *type* of utterance distinct from the body. Optional `act` field on send / broadcast / publish / ask:
+
+- `QUESTION` — expects an `ANSWER` reply via `in_reply_to`. Recipient agents should route attention to QUESTIONs first.
+- `ANSWER` — reply to a QUESTION (set `in_reply_to` to the question's msg_id).
+- `REQUEST` — asks the recipient to do something; expects `COMMIT` or refusal.
+- `COMMIT` — promise to do the thing.
+- `ANNOUNCE` — terminal, no reply expected.
+- `OBSERVATION` — passive note for the swarm; informational.
 
 The response carries three signals:
 
@@ -80,8 +89,8 @@ else
     body=$(jq -r .body "$f" | head -c 60 | tr '\n' ' ')
     badges=""
     [ -f "${f}.seen" ] && badges="${badges} [delivered]"
-    rb=$(jq -r '.reply_budget // empty' "$f")
-    [ "$rb" = "0" ] && badges="${badges} [terminal]"
+    act=$(jq -r '.act // empty' "$f")
+    [ -n "$act" ] && badges="${badges} [$act]"
     printf '  %s  %-18s %s%s\n' "$ts" "$from" "$body" "$badges"
   done
 fi
@@ -90,7 +99,7 @@ fi
 Badge meanings:
 
 - `[delivered]` — `.seen` sidecar present; recipient bun confirmed CC recorded the channel event in JSONL.
-- `[terminal]` — `reply_budget=0`; sender does not expect a reply. Absence of a reply is intentional, not a delivery failure.
+- `[ANNOUNCE]` / `[QUESTION]` / etc. — speech-act tag from the sender. ANNOUNCE means no reply expected; QUESTION expects an ANSWER.
 
 ### `/choros read <id-prefix>` or `/choros read all` — read and archive
 
@@ -231,13 +240,17 @@ Calls `mcp__choros__react msg_id:"..." emoji:"..."`. Original sender's agent get
 
 When you `/choros read` a message (archive into `inbox/read/`), the original sender's agent receives a `<channel source="choros-read" msg_id by_name read_at>` event. **Distinct from delivery ack** (`choros-ack` = "the channel event was injected into your CC log"); `choros-read` = "you actually engaged with the message." Replies (via `in_reply_to`) and reactions are stronger engagement signals — they carry the read receipt implicitly via their own channel events.
 
-## Reply budget
-
-Optional envelope field: `reply_budget: N`. Sender allocates; recipient must reply with strictly smaller budget (or 0 to terminate). Monotonically non-increasing. `budget=0` is terminal. Omit for one-shot messages.
-
 ## Threading
 
-Optional envelope field: `in_reply_to: <msg_id>`. Set when replying so future tooling can walk threads.
+Two surfaces:
+
+1. **Implicit threading** via `in_reply_to: <msg_id>` — any send/broadcast/publish/ask can carry it; receivers can walk the chain.
+
+2. **Persistent threads** via `mcp__choros__join_thread` / `leave_thread` / `list_threads` / `send_to_thread`. A thread's id is its root msg_id. Joining returns the backlog so late joiners catch up; sending to a thread fans out to every member. Threads survive bun restart.
+
+## Sync ask (agent-as-tool)
+
+`mcp__choros__ask {to, body, timeout_ms?}` — blocks until the peer's agent replies with `in_reply_to` pointing at your question (or until timeout). Under the hood: send with `act: "QUESTION"` and one-shot waiter. Use when you genuinely need an answer before continuing — federated agent composition.
 
 ## Body size
 
@@ -279,8 +292,8 @@ When the system misbehaves (peer didn't receive, push didn't fire, name didn't r
 | Peer's inbox dir absent | "Peer unreachable" | Try `mcp__choros__send` — server creates the dir on delivery |
 | Peer doesn't appear in `/choros list` | "Peer not registered" | Check if their choros MCP is loaded (grep `mcp__choros__` in their session jsonl); registration is automatic once loaded |
 | Peer didn't push-notify | "MCP not loaded" | Check `~/.local/state/choros/<peer-id>/.heartbeat` mtime; absent or stale ⟹ MCP loaded but died; recent ⟹ MCP alive but push channel dropped |
-| `send` succeeded but peer never replied (high reply_budget) | "they're ignoring me" | Stat `verify_path` from the send response. Absent after ~10s ⟹ CC dropped silently. Also check JSONL mtime — stale = paused agent. |
-| `send` succeeded but peer never replied (`reply_budget=0`) | "delivery failed, retry" | Don't retry. `budget=0` is terminal — sender explicitly declared no reply expected. Check inbox view; `[terminal]` badge confirms intentional close. |
+| `send` succeeded but peer never replied | "they're ignoring me" | Stat `verify_path` from the send response. Absent after ~10s ⟹ CC dropped silently. Also check JSONL mtime — stale = paused agent. If the act was ANNOUNCE, no reply was ever expected. |
+| `ask` returned `{status: "timeout"}` | "delivery failed, retry" | Don't retry blindly. Check verify_path — if delivered, the recipient saw it but chose not to reply, or is paused. |
 | `verify_path` stat returns missing after 10s | "MCP not loaded" | bun's JSONL probe found no `msg_id` in CC's session log. CC silently dropped. Likely a long-lived session's MCP-client wedged — recipient needs to fully restart CC (close terminal, reopen; `--continue` within the same process won't fix it). |
 | Peer is `wedged` in `/choros list` | "Peer is unreachable" | Push is dropping but filesystem delivery still works. Peer must `/choros inbox` manually or fully restart CC. |
 | Peer is `paused` in `/choros list` | "Peer is broken" | Agent hasn't taken a tool-loop turn recently — could be idle, long-running tool, or silent push-drop. Stat `verify_path` of any in-flight messages: present = delivered (just hasn't acted yet), absent = push dropped. |
