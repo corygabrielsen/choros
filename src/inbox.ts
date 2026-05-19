@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import type { AskRegistry } from './ask-registry.ts'
 import {
   JSONL_VERIFY_TIMEOUT_MS,
   type WedgeState,
@@ -96,6 +97,7 @@ export async function emitInboxMessage(
   wedgeState: WedgeState,
   emittedDroppedAcks: Set<string>,
   filename: string,
+  askRegistry?: AskRegistry,
 ): Promise<EmitResult> {
   if (!filename.endsWith('.json')) return { status: 'skipped' }
   if (filename.startsWith('.')) return { status: 'skipped' }
@@ -109,6 +111,7 @@ export async function emitInboxMessage(
 
   const data = await readInboxMessage(ctx, src)
   if (!data) return { status: 'skipped' }
+  if (askRegistry) askRegistry.notifyIfWaiting(data)
   const msgId = String(data.id ?? '')
   const meta: Record<string, string> = {
     source: 'choros',

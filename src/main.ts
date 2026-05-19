@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { AskRegistry } from './ask-registry.ts'
 import type { WedgeState } from './delivery.ts'
 import { type Context, type Mcp, realContext } from './effects.ts'
 import { HEARTBEAT_INTERVAL_MS, buildHeartbeat, writeHeartbeat } from './heartbeat.ts'
@@ -10,6 +11,7 @@ import { resolveIdentity, resolveMyName } from './identity.ts'
 import { emitInboxMessage } from './inbox.ts'
 import { broadcastPresence, broadcastRename, emitBootRoster, emitPresence } from './presence.ts'
 import { projectsRoot, resolveStateRoot } from './state-root.ts'
+import { handleAsk } from './tools/ask.ts'
 import { handleBroadcast } from './tools/broadcast.ts'
 import { handleDoctor } from './tools/doctor.ts'
 import { handlePublish } from './tools/publish.ts'
@@ -24,7 +26,7 @@ import {
   handleSendToThread,
 } from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.21.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.22.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -63,6 +65,7 @@ for (const dir of [MY_INBOX, MY_READ, MY_SENT, MY_ACKS, MY_PRESENCE]) {
 
 const wedge: WedgeState = { consecutiveTimeouts: 0 }
 const droppedAcksEmitted = new Set<string>()
+const askRegistry = new AskRegistry()
 let myName = await resolveMyName(ctx, identity, PROJECTS_ROOT)
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -102,6 +105,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'send_to_thread',
       description: 'Append a message to a thread; fans out to every member.',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'ask',
+      description: 'Send a QUESTION to a peer and block until they reply (or timeout).',
       inputSchema: { type: 'object' },
     },
   ],
@@ -212,6 +220,15 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
       )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
+    case 'ask': {
+      const r = await handleAsk(
+        ctx,
+        { stateRoot: STATE_ROOT, projectsRoot: PROJECTS_ROOT, me: ME, myName, mySentDir: MY_SENT },
+        askRegistry,
+        args as Parameters<typeof handleAsk>[3],
+      )
+      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
+    }
     default:
       throw new Error(`unknown tool: ${req.params.name}`)
   }
@@ -282,6 +299,7 @@ inboxWatcher.onStdout(chunk => {
       wedge,
       droppedAcksEmitted,
       filename,
+      askRegistry,
     )
   }
 })
@@ -318,7 +336,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.21 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.22 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )
