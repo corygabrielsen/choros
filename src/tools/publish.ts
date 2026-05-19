@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { atomicWrite } from '#choros/delivery.ts'
+import { ensureDir } from '#choros/dir-cache.ts'
 import type { Context } from '#choros/effects.ts'
 import { generateMessageId, isSelf, listKnownInstances, parseMentions } from '#choros/identity.ts'
 import { asStringField, enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
@@ -83,16 +84,16 @@ export async function handlePublish(
     ...(mentions.length > 0 ? { mentions } : {}),
     ...(act ? { act } : {}),
   }
-  await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
-  await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase, null, 2))
+  await ensureDir(ctx, targets.mySentDir)
+  await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msgBase))
   const delivered: string[] = []
   const failures: { recipient: string; error: string }[] = []
   await Promise.all(
     subscribers.map(async subId => {
       try {
-        const payload = JSON.stringify({ ...msgBase, to_session: subId }, null, 2)
+        const payload = JSON.stringify({ ...msgBase, to_session: subId })
         const inboxDir = join(targets.stateRoot, subId, 'inbox')
-        await ctx.fs.mkdir(inboxDir, { recursive: true })
+        await ensureDir(ctx, inboxDir)
         await atomicWrite(ctx, join(inboxDir, `${id}.json`), payload)
         delivered.push(subId)
       } catch (e: unknown) {

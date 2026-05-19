@@ -202,43 +202,64 @@ export async function findJsonlForSession(
  *  call reads only the last few KB of a multi-MB file. Called from every
  *  heartbeat tick, every tool handler, and every doctor / publish /
  *  broadcast peer enumeration — must stay sublinear in file size. */
+/** Size of the tail window we scan for custom-title / ai-title events.
+ *  CC appends those events as the session lives, so the most recent
+ *  ones sit at the very end of the file; a 64 KB tail covers the
+ *  typical case without buffering multi-MB transcripts. The window
+ *  doubles up to MAX_TAIL_BYTES if no title-bearing line is found on
+ *  the first pass. */
+const DISPLAY_NAME_TAIL_BYTES = 64 * 1024
+const DISPLAY_NAME_MAX_TAIL_BYTES = 1024 * 1024
+
 export async function readDisplayNameForJsonl(
   ctx: Pick<Context, 'fs'>,
   jsonl: string | null,
 ): Promise<string | null> {
   if (!jsonl) return null
-  // Collect lines into an array so we can walk in reverse. The full read
-  // is still bounded by the file size, but the parse cost (which dominates
-  // when there are many matching lines) drops to one parse on the typical
-  // case (the latest custom-title appears at the end of the file).
-  const lines: string[] = []
+  let size: number
   try {
-    for await (const line of ctx.fs.readLines(jsonl)) {
-      lines.push(line)
-    }
+    size = (await ctx.fs.stat(jsonl)).size
   } catch {
     return null
   }
-  // Walk backwards. Return the first custom-title we find. If we exhaust
-  // without finding one, fall back to the first ai-title from the back.
-  let aiTitleFallback: string | null = null
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]
-    if (!line) continue
-    if (!(line.includes('"custom-title"') || line.includes('"ai-title"'))) continue
+  let window = DISPLAY_NAME_TAIL_BYTES
+  while (window <= DISPLAY_NAME_MAX_TAIL_BYTES) {
+    const offset = Math.max(0, size - window)
+    let chunk: string
     try {
-      const ev = JSON.parse(line)
-      if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {
-        return ev.customTitle
-      }
-      if (aiTitleFallback === null && ev?.type === 'ai-title' && typeof ev.aiTitle === 'string') {
-        aiTitleFallback = ev.aiTitle
-      }
+      chunk = await ctx.fs.readBytesFromOffset(jsonl, offset, size - offset)
     } catch {
-      /* skip unparseable line */
+      return null
     }
+    // Discard the first partial line if we didn't start at byte 0 — it
+    // may be a half-line that would fail JSON.parse and mask the real
+    // title further down the tail.
+    const lines = chunk.split('\n')
+    if (offset > 0 && lines.length > 0) lines.shift()
+    let aiTitleFallback: string | null = null
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]
+      if (!line) continue
+      if (!(line.includes('"custom-title"') || line.includes('"ai-title"'))) continue
+      try {
+        const ev = JSON.parse(line)
+        if (ev?.type === 'custom-title' && typeof ev.customTitle === 'string') {
+          return ev.customTitle
+        }
+        if (aiTitleFallback === null && ev?.type === 'ai-title' && typeof ev.aiTitle === 'string') {
+          aiTitleFallback = ev.aiTitle
+        }
+      } catch {
+        /* skip unparseable line */
+      }
+    }
+    if (aiTitleFallback !== null) return aiTitleFallback
+    // No title in this window. If we've already scanned the whole file,
+    // there's nothing to find. Otherwise grow and retry.
+    if (offset === 0) return null
+    window *= 2
   }
-  return aiTitleFallback
+  return null
 }
 
 /**

@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { ensureDir } from '#choros/dir-cache.ts'
 import type { Context } from '#choros/effects.ts'
 import { sanitizeId } from '#choros/identity.ts'
 import { asStringField } from '#choros/inbox.ts'
@@ -295,7 +296,7 @@ export async function writeAckToSender(
   const ext = status === 'delivered' ? 'ack' : 'dropped'
   const otherExt = ext === 'ack' ? 'dropped' : 'ack'
   const senderAcksDir = join(targets.stateRoot, fromSession, 'sent_acks')
-  await ctx.fs.mkdir(senderAcksDir, { recursive: true })
+  await ensureDir(ctx, senderAcksDir)
   const path = join(senderAcksDir, `${msgId}.${ext}`)
   if (ctx.fs.existsSync(path)) return 'skipped'
   if (ctx.fs.existsSync(join(senderAcksDir, `${msgId}.${otherExt}`))) return 'skipped'

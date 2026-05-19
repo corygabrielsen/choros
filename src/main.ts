@@ -82,18 +82,23 @@ const AGENT_STATE_PATH = join(MY_ROOT, '.agent_state')
 const WEDGE_PATH = join(MY_ROOT, '.wedged')
 const SUBSCRIPTIONS_PATH = join(MY_ROOT, '.subscriptions')
 
-for (const dir of [MY_INBOX, MY_READ, MY_SENT, MY_ACKS, MY_PRESENCE]) {
-  await ctx.fs.mkdir(dir, { recursive: true })
-}
+await Promise.all(
+  [MY_INBOX, MY_READ, MY_SENT, MY_ACKS, MY_PRESENCE].map(dir =>
+    ctx.fs.mkdir(dir, { recursive: true }),
+  ),
+)
 
 // Sweep orphan `*.tmp` files left by peers (or by this session) whose
 // atomicWrite was killed mid-rename. Peers write to our inbox/presence/
 // sent_acks dirs, and a force-killed peer leaves us holding the tmp.
-// Unlinking files whose embedded writer-pid is dead is safe.
-for (const dir of [MY_INBOX, MY_ACKS, MY_PRESENCE]) {
-  const removed = await cleanupOrphanTmpFiles(ctx, dir)
-  if (removed > 0) ctx.proc.stderr(`[choros] swept ${removed} orphan .tmp file(s) from ${dir}\n`)
-}
+// Unlinking files whose embedded writer-pid is dead is safe. The three
+// dirs are independent — sweep them in parallel.
+await Promise.all(
+  [MY_INBOX, MY_ACKS, MY_PRESENCE].map(async dir => {
+    const removed = await cleanupOrphanTmpFiles(ctx, dir)
+    if (removed > 0) ctx.proc.stderr(`[choros] swept ${removed} orphan .tmp file(s) from ${dir}\n`)
+  }),
+)
 
 // Clear any `.wedged` marker from the previous bun lifetime. The marker
 // is gated on an in-memory `consecutiveTimeouts` counter that resets on
@@ -379,12 +384,16 @@ async function tickHeartbeat(): Promise<void> {
   }
 }
 
-await tickHeartbeat()
+// Fire the initial heartbeat in parallel with the MCP handshake — neither
+// blocks the other, and tools become callable as soon as connect resolves.
+// Heartbeat freshness for peers is improved by ~handshake-time on every boot.
+const initialHeartbeat = tickHeartbeat()
 const heartbeatInterval = setInterval(() => {
   void tickHeartbeat()
 }, HEARTBEAT_INTERVAL_MS)
 
 await server.connect(new StdioServerTransport())
+await initialHeartbeat
 
 // Recomputed at each use so the freshest myName flows into the broadcast.
 const helloPeers = await broadcastPresence(

@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { atomicWrite } from '#choros/delivery.ts'
+import { ensureDir } from '#choros/dir-cache.ts'
 import type { Context } from '#choros/effects.ts'
 import { isSelf, sanitizeId } from '#choros/identity.ts'
 import { asStringField } from '#choros/inbox.ts'
@@ -48,7 +49,7 @@ export async function handleReact(
     throw new Error('react: cannot react to a message from self')
   }
   const senderAcksDir = join(targets.stateRoot, senderSession, 'sent_acks')
-  await ctx.fs.mkdir(senderAcksDir, { recursive: true })
+  await ensureDir(ctx, senderAcksDir)
   // Filename keyed on (msg_id, reactor) so two peers reacting to the
   // same message — or the same peer reacting twice — don't clobber one
   // another's `.react` file. The sender's bun consumes all matching

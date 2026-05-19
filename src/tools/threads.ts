@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { atomicWrite } from '#choros/delivery.ts'
+import { ensureDir } from '#choros/dir-cache.ts'
 import type { Context } from '#choros/effects.ts'
 import { generateMessageId, sanitizeId } from '#choros/identity.ts'
 import {
@@ -132,8 +133,8 @@ export async function handleSendToThread(
   }
 
   await appendToThread(ctx, { stateRoot: targets.stateRoot }, threadId, msg)
-  await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
-  await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msg, null, 2))
+  await ensureDir(ctx, targets.mySentDir)
+  await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msg))
 
   const members = await listMembers(ctx, { stateRoot: targets.stateRoot }, threadId)
   const recipients: string[] = []
@@ -147,11 +148,11 @@ export async function handleSendToThread(
     }
     try {
       const inboxDir = join(targets.stateRoot, peerId, 'inbox')
-      await ctx.fs.mkdir(inboxDir, { recursive: true })
+      await ensureDir(ctx, inboxDir)
       await atomicWrite(
         ctx,
         join(inboxDir, `${id}.json`),
-        JSON.stringify({ ...msg, to_session: peerId }, null, 2),
+        JSON.stringify({ ...msg, to_session: peerId }),
       )
       recipients.push(peerId)
     } catch (e: unknown) {

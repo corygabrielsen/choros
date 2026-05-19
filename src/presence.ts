@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { atomicWrite, PUSH_TIMEOUT_MS, withTimeout } from '#choros/delivery.ts'
+import { ensureDir } from '#choros/dir-cache.ts'
 import type { Context } from '#choros/effects.ts'
 import { isLivePeer } from '#choros/health.ts'
 import { isSelf, listKnownInstances } from '#choros/identity.ts'
@@ -37,7 +38,7 @@ export async function writePresence(
 ): Promise<void> {
   if (peerId === targets.me) return
   const peerPresenceDir = join(targets.stateRoot, peerId, 'presence')
-  await ctx.fs.mkdir(peerPresenceDir, { recursive: true })
+  await ensureDir(ctx, peerPresenceDir)
   const tsId = ctx.clock
     .nowIso()
     .replace(/[-:]/g, '')

@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { atomicWrite } from '#choros/delivery.ts'
+import { ensureDir } from '#choros/dir-cache.ts'
 import type { Context } from '#choros/effects.ts'
 import {
   type RecipientHealth,
@@ -116,12 +117,12 @@ export async function handleSend(
   if (typeof args.in_reply_to === 'string' && args.in_reply_to.trim()) {
     msg.in_reply_to = args.in_reply_to.trim()
   }
-  const payload = JSON.stringify(msg, null, 2)
-  await ctx.fs.mkdir(targets.mySentDir, { recursive: true })
+  const payload = JSON.stringify(msg)
+  await ensureDir(ctx, targets.mySentDir)
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), payload)
 
   const recipientInbox = join(targets.stateRoot, recipient.id, 'inbox')
-  await ctx.fs.mkdir(recipientInbox, { recursive: true })
+  await ensureDir(ctx, recipientInbox)
   const finalPath = join(recipientInbox, `${id}.json`)
   await atomicWrite(ctx, finalPath, payload)
 

@@ -8,6 +8,7 @@ import {
   type WedgeState,
   writeAckToSender,
 } from '#choros/delivery.ts'
+import { ensureDir } from '#choros/dir-cache.ts'
 import type { Context } from '#choros/effects.ts'
 import { findJsonlForSession } from '#choros/identity.ts'
 
@@ -396,7 +397,7 @@ export async function archiveInboxMessage(
 ): Promise<string> {
   const src = join(targets.inboxDir, filename)
   const dst = join(targets.readDir, filename)
-  await ctx.fs.mkdir(targets.readDir, { recursive: true })
+  await ensureDir(ctx, targets.readDir)
   await ctx.fs.rename(src, dst)
   try {
     await ctx.fs.unlink(`${src}.seen`)
