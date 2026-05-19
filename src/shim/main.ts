@@ -112,13 +112,15 @@ async function emitDaemonNotification(method: string, params: unknown): Promise<
     })
     // Inbound messages get a confirm_delivery call so the daemon can
     // close the loop and fire `choros.ack` back to the original sender.
+    // Fire-and-forget: awaiting the round-trip would serialize the
+    // next inbound message behind this one's ack, halving inbound
+    // throughput.
     if (method === 'choros.inbound_message' && typeof p.msg_id === 'string') {
-      try {
-        await rpc.call('choros.confirm_delivery', { session_id: ME, msg_id: p.msg_id })
-      } catch (e: unknown) {
+      const msgId = p.msg_id
+      rpc.call('choros.confirm_delivery', { session_id: ME, msg_id: msgId }).catch((e: unknown) => {
         const m = e instanceof Error ? e.message : String(e)
         ctx.proc.stderr(`[choros-shim] confirm_delivery failed: ${m}\n`)
-      }
+      })
     }
   } catch (e: unknown) {
     const m = e instanceof Error ? e.message : String(e)

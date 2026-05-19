@@ -100,7 +100,11 @@ export function handleSend(ctx: HandlerCtx, rawArgs: unknown): SendResult | RpcE
     return { code: ERR_INVALID_PARAMS, message: 'send: cannot send to self' }
   }
 
-  const msgId = parsed.msg_id ?? generateMessageId(parsed.session_id, ctx.nowIso())
+  // Memoize the per-call ISO timestamp so the inserted row and the
+  // recipient's notification share the same ts. Calling ctx.nowIso()
+  // three times also allocates 3 Date objects for nothing.
+  const ts = ctx.nowIso()
+  const msgId = parsed.msg_id ?? generateMessageId(parsed.session_id, ts)
   const replyTrim = parsed.in_reply_to?.trim() || null
 
   ctx.storage.db
@@ -108,15 +112,7 @@ export function handleSend(ctx: HandlerCtx, rawArgs: unknown): SendResult | RpcE
       `INSERT INTO messages (id, from_session, to_session, body, act, in_reply_to, ts)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(
-      msgId,
-      parsed.session_id,
-      recipient.id,
-      parsed.body,
-      parsed.act ?? null,
-      replyTrim,
-      ctx.nowIso(),
-    )
+    .run(msgId, parsed.session_id, recipient.id, parsed.body, parsed.act ?? null, replyTrim, ts)
 
   const senderName = cachedSenderName(ctx, parsed.session_id)
 
@@ -126,7 +122,7 @@ export function handleSend(ctx: HandlerCtx, rawArgs: unknown): SendResult | RpcE
     from_name: senderName,
     to_session: recipient.id,
     body: parsed.body,
-    ts: ctx.nowIso(),
+    ts,
     ...(parsed.act ? { act: parsed.act } : {}),
     ...(replyTrim ? { in_reply_to: replyTrim } : {}),
   })
