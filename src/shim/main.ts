@@ -254,7 +254,11 @@ const heartbeatInterval = setInterval(() => {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg.includes(String(ERR_UNKNOWN_SESSION)) || msg.includes('not registered')) {
         ctx.proc.stderr('[choros-shim] heartbeat: session unknown — forcing reconnect\n')
-        void rpc.close().then(() => process.exit(1))
+        // Route through shutdown() rather than a bare rpc.close + exit
+        // so the heartbeat interval is cleared, the deregister timeout
+        // races correctly, and we don't leak an interval that keeps
+        // firing against a closed client until the process exits.
+        void shutdown('heartbeat-unknown-session').finally(() => ctx.proc.exit(1))
       }
       /* transient disconnect: reconnect loop will re-register */
     }

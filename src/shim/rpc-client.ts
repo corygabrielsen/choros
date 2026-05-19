@@ -158,7 +158,23 @@ export async function connectRpcClient(opts: {
         },
       },
     })
-    if (opts.onConnect) await opts.onConnect(client)
+    if (opts.onConnect) {
+      try {
+        await opts.onConnect(client)
+      } catch (e) {
+        // A throwing onConnect (e.g. shim register handler) MUST NOT
+        // strand the open socket. Tear it down and let the close
+        // handler schedule a reconnect.
+        const dead = socket
+        socket = null
+        try {
+          dead?.end()
+        } catch {
+          /* already gone */
+        }
+        throw e
+      }
+    }
   }
 
   // `client` is referenced inside `open()` (via the onConnect call).

@@ -17,7 +17,7 @@
  * instance per user enforced by the lockfile (which encodes the pid +
  * a liveness check via `/proc` or `kill(pid, 0)`).
  */
-import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { startAdminServer } from '#choros/daemon/admin.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
@@ -35,7 +35,20 @@ import {
 const VERSION = '1.0.0'
 
 const STATE_ROOT = resolveStateRootFromEnv()
-mkdirSync(STATE_ROOT, { recursive: true })
+// 0700 so the SQLite database (which holds message bodies +
+// agent_status/intent set by other CCs) isn't world-traversable. The
+// sockets each chmod themselves to 0600, but without this dir mode
+// the DB sits open at default umask (0755). The mkdir `mode` option
+// only applies when the dir is freshly created, so also chmod
+// explicitly to fix the mode on an existing dir created at default
+// umask by an older daemon version.
+mkdirSync(STATE_ROOT, { recursive: true, mode: 0o700 })
+try {
+  chmodSync(STATE_ROOT, 0o700)
+} catch (e: unknown) {
+  const m = e instanceof Error ? e.message : String(e)
+  process.stderr.write(`[choros-daemon] STATE_ROOT chmod failed: ${m}\n`)
+}
 
 const SOCKET_PATH = daemonSocketPath()
 const ADMIN_SOCKET_PATH = adminSocketPath()
