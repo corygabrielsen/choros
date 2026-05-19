@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import type { Context } from './effects.ts'
 import { sanitizeId } from './identity.ts'
+import { asStringField } from './inbox.ts'
 
 export const PUSH_TIMEOUT_MS = 5_000
 export const JSONL_VERIFY_TIMEOUT_MS = 5_000
@@ -181,8 +182,17 @@ export async function writeAckToSender(
   status: 'delivered' | 'dropped',
   recipientPid: number,
 ): Promise<'written' | 'skipped'> {
-  const fromSession = String(msg.from_session ?? '')
-  const msgId = String(msg.id ?? '')
+  let fromSession: string
+  let msgId: string
+  try {
+    fromSession = asStringField(msg.from_session, 'writeAckToSender.from_session')
+    msgId = asStringField(msg.id, 'writeAckToSender.id')
+  } catch {
+    // Non-string field; an attacker-controlled inbound msg sent
+    // `from_session: {}` which `String(value ?? '')` would coerce to
+    // "[object Object]" and corrupt routing.
+    return 'skipped'
+  }
   if (!fromSession || !msgId) return 'skipped'
   if (fromSession === targets.me) return 'skipped'
   // Sanitize before path construction: from_session arrives from inbound msg

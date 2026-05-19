@@ -3,12 +3,13 @@ import { join } from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { emitAck } from './acks.ts'
 import { AskRegistry } from './ask-registry.ts'
 import type { WedgeState } from './delivery.ts'
 import { type Context, type Mcp, realContext } from './effects.ts'
 import { HEARTBEAT_INTERVAL_MS, buildHeartbeat, writeHeartbeat } from './heartbeat.ts'
 import { createNameCache, resolveIdentity, resolveMyNameCached } from './identity.ts'
-import { emitInboxMessage } from './inbox.ts'
+import { asStringField, emitInboxMessage } from './inbox.ts'
 import { broadcastPresence, broadcastRename, emitBootRoster, emitPresence } from './presence.ts'
 import { projectsRoot, resolveStateRoot } from './state-root.ts'
 import { handleAsk } from './tools/ask.ts'
@@ -26,7 +27,7 @@ import {
   handleSendToThread,
 } from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.24.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.25.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -44,9 +45,9 @@ process.stdout.on('error', (e: NodeJS.ErrnoException) => {
   ctx.proc.stderr(`[choros] stdout error: ${e}\n`)
 })
 
-const identity = resolveIdentity(ctx)
 const STATE_ROOT = resolveStateRoot(ctx)
 const PROJECTS_ROOT = projectsRoot(ctx)
+const identity = await resolveIdentity(ctx, PROJECTS_ROOT)
 const ME = identity.me
 const MY_ROOT = join(STATE_ROOT, ME)
 const MY_INBOX = join(MY_ROOT, 'inbox')
@@ -175,7 +176,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
       const r = await handleSubscribe(
         ctx,
         { subscriptionsPath: SUBSCRIPTIONS_PATH },
-        String(args.topic ?? ''),
+        asStringField(args.topic, 'topic'),
       )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
@@ -183,7 +184,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
       const r = await handleUnsubscribe(
         ctx,
         { subscriptionsPath: SUBSCRIPTIONS_PATH },
-        String(args.topic ?? ''),
+        asStringField(args.topic, 'topic'),
       )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
@@ -199,7 +200,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
       const r = await handleSetStatus(
         ctx,
         { agentStatePath: AGENT_STATE_PATH },
-        String(args.text ?? ''),
+        asStringField(args.text, 'text'),
       )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
@@ -207,7 +208,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
       const r = await handleSetIntent(
         ctx,
         { agentStatePath: AGENT_STATE_PATH },
-        String(args.text ?? ''),
+        asStringField(args.text, 'text'),
       )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
@@ -225,7 +226,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
       const r = await handleJoinThread(
         ctx,
         { stateRoot: STATE_ROOT, me: ME, myName, mySentDir: MY_SENT },
-        String(args.thread_id ?? ''),
+        asStringField(args.thread_id, 'thread_id'),
       )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
@@ -233,7 +234,7 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
       const r = await handleLeaveThread(
         ctx,
         { stateRoot: STATE_ROOT, me: ME, myName, mySentDir: MY_SENT },
-        String(args.thread_id ?? ''),
+        asStringField(args.thread_id, 'thread_id'),
       )
       return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
     }
@@ -348,7 +349,90 @@ presenceWatcher.onStdout(chunk => {
   }
 })
 
-const watchers = [inboxWatcher, presenceWatcher]
+// Pre-scan + watch sent_acks/ for incoming .ack / .dropped / .react / .read
+// files. Recipient bun JSONL-confirms our outbound msg and writes here;
+// without this watcher, choros-ack / choros-read / choros-reaction events
+// are documented in SKILL.md but never fire.
+try {
+  const existingAcks = await ctx.fs.readdir(MY_ACKS)
+  for (const f of existingAcks.sort()) {
+    if (f.startsWith('.')) continue
+    void emitAck(ctx, MY_ACKS, f)
+  }
+} catch {
+  /* dir doesn't exist yet — created above */
+}
+const ackWatcher = ctx.spawner.spawn('inotifywait', [
+  '-m',
+  '-q',
+  '-e',
+  'close_write,moved_to',
+  '--format',
+  '%f',
+  MY_ACKS,
+])
+ackWatcher.onStdout(chunk => {
+  for (const filename of chunk.split('\n').filter(Boolean)) {
+    void emitAck(ctx, MY_ACKS, filename)
+  }
+})
+
+// Periodic re-emit sweep. Inbox files that timed out (push_timeout or
+// JSONL-probe miss) still need redelivery; the inotify watcher fires
+// once on each filesystem change, so without periodic re-scan a wedged
+// CC during the initial push silently loses the message.
+let sweepInFlight = false
+const SWEEP_INTERVAL_MS_LOCAL = 60_000
+async function reemitSweep(): Promise<void> {
+  if (sweepInFlight) return
+  sweepInFlight = true
+  try {
+    let entries: string[] = []
+    try {
+      entries = await ctx.fs.readdir(MY_INBOX)
+    } catch {
+      return
+    }
+    const candidates = entries.filter(
+      f => f.endsWith('.json') && !f.startsWith('.') && !f.endsWith('.seen'),
+    )
+    const targets = candidates.filter(f => !ctx.fs.existsSync(`${MY_INBOX}/${f}.seen`))
+    if (targets.length === 0) return
+    ctx.proc.stderr(`[choros] sweep: retrying ${targets.length} un-pushed file(s)\n`)
+    for (const f of targets) {
+      try {
+        await emitInboxMessage(
+          ctx,
+          {
+            stateRoot: STATE_ROOT,
+            projectsRoot: PROJECTS_ROOT,
+            me: ME,
+            myName,
+            wedgePath: WEDGE_PATH,
+            inboxDir: MY_INBOX,
+            readDir: MY_READ,
+          },
+          wedge,
+          droppedAcksEmitted,
+          inFlightEmits,
+          f,
+          askRegistry,
+        )
+      } catch (e: unknown) {
+        const m = e instanceof Error ? e.message : String(e)
+        ctx.proc.stderr(`[choros] sweep emit error for ${f}: ${m}\n`)
+      }
+    }
+  } finally {
+    sweepInFlight = false
+  }
+}
+const sweepInterval = setInterval(() => {
+  void reemitSweep()
+}, SWEEP_INTERVAL_MS_LOCAL)
+sweepInterval.unref?.()
+
+const watchers = [inboxWatcher, presenceWatcher, ackWatcher]
 let shuttingDown = false
 
 // Synchronous part of shutdown — safe to call from process 'exit' handler
@@ -358,25 +442,35 @@ function shutdownSync(): void {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(heartbeatInterval)
+  clearInterval(sweepInterval)
   for (const w of watchers) w.kill()
 }
+
+let shutdownAsyncPromise: Promise<void> | null = null
 
 // Async shutdown — runs on SIGINT/SIGTERM where we still have the event loop.
 // Broadcasts a goodbye to live peers with a hard deadline so a wedged peer
 // doesn't block us indefinitely. Recomputes targets so the freshest myName
 // is broadcast (the heartbeat tick may have updated it since boot).
 async function shutdownAsync(): Promise<void> {
-  shutdownSync()
-  try {
-    const targets = { stateRoot: STATE_ROOT, projectsRoot: PROJECTS_ROOT, me: ME, myName }
-    await Promise.race([
-      broadcastPresence(ctx, targets, 'goodbye'),
-      new Promise<void>(resolve => setTimeout(resolve, 2_000)),
-    ])
-  } catch (e: unknown) {
-    const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros] goodbye broadcast failed: ${m}\n`)
-  }
+  // Idempotent across concurrent signals. The first SIGINT/SIGTERM
+  // installs the promise; later signals await the same one rather than
+  // racing on broadcastPresence + re-running the timeout.
+  if (shutdownAsyncPromise) return shutdownAsyncPromise
+  shutdownAsyncPromise = (async (): Promise<void> => {
+    shutdownSync()
+    try {
+      const targets = { stateRoot: STATE_ROOT, projectsRoot: PROJECTS_ROOT, me: ME, myName }
+      await Promise.race([
+        broadcastPresence(ctx, targets, 'goodbye'),
+        new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+      ])
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e)
+      ctx.proc.stderr(`[choros] goodbye broadcast failed: ${m}\n`)
+    }
+  })()
+  return shutdownAsyncPromise
 }
 
 process.on('exit', shutdownSync)
@@ -388,7 +482,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.24 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.25 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )

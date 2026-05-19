@@ -52,24 +52,36 @@ describe('sanitizeId', () => {
 })
 
 describe('resolveIdentity', () => {
-  test('CHOROS_IDENTITY override wins', () => {
+  test('CHOROS_IDENTITY override wins', async () => {
     const ctx = fakeContext()
     ctx.env.vars.CHOROS_IDENTITY = 'override-name'
-    const id = resolveIdentity(ctx)
+    const id = await resolveIdentity(ctx)
     expect(id).toMatchObject({ me: 'override-name', meIsUuid: false, source: 'CHOROS_IDENTITY' })
   })
 
-  test('CLAUDE_CODE_SESSION_ID with UUID shape wins next', () => {
+  test('CLAUDE_CODE_SESSION_ID with UUID shape wins next', async () => {
     const ctx = fakeContext()
     const uuid = '12345678-1234-1234-1234-1234567890ab'
     ctx.env.vars.CLAUDE_CODE_SESSION_ID = uuid
-    const id = resolveIdentity(ctx)
+    const id = await resolveIdentity(ctx)
     expect(id).toMatchObject({ me: uuid, meIsUuid: true, source: 'CLAUDE_CODE_SESSION_ID' })
   })
 
-  test('falls back to cwd-derived id', () => {
+  test('newest UUID jsonl in project dir wins when no env hints', async () => {
     const ctx = fakeContext()
-    const id = resolveIdentity(ctx)
+    ctx.env.vars.PWD = '/x'
+    const older = '11111111-1111-1111-1111-111111111111'
+    const newer = '22222222-2222-2222-2222-222222222222'
+    await ctx.fs.writeFile(`${PROJECTS}/-x/${older}.jsonl`, '')
+    ctx.clock.advance(1000)
+    await ctx.fs.writeFile(`${PROJECTS}/-x/${newer}.jsonl`, '')
+    const id = await resolveIdentity(ctx, PROJECTS)
+    expect(id).toMatchObject({ me: newer, meIsUuid: true, source: 'newest-jsonl-in-project-dir' })
+  })
+
+  test('falls back to cwd-derived id when no env, no jsonl', async () => {
+    const ctx = fakeContext()
+    const id = await resolveIdentity(ctx)
     expect(id.meIsUuid).toBe(false)
     expect(id.source).toBe('cwd')
   })

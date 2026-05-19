@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { isSelf, listKnownInstances, parseMentions } from '../identity.ts'
-import { enforceBodyCap, validateSpeechAct } from '../inbox.ts'
+import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 import { listSubscribers } from './subscribe.ts'
 
 export interface PublishArgs {
@@ -30,8 +30,8 @@ export async function handlePublish(
   targets: PublishTargets,
   args: PublishArgs,
 ): Promise<PublishResult> {
-  const topic = (args.topic ?? '').trim()
-  const body = args.body ?? ''
+  const topic = asStringField(args.topic, 'publish.topic').trim()
+  const body = asStringField(args.body, 'publish.body')
   if (!topic) throw new Error('publish: "topic" is required')
   if (!body) throw new Error('publish: "body" is required')
   enforceBodyCap(body, 'publish')

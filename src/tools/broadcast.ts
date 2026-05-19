@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { parseMentions } from '../identity.ts'
-import { enforceBodyCap, validateSpeechAct } from '../inbox.ts'
+import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 import { liveEligiblePeers } from '../presence.ts'
 
 export interface BroadcastArgs {
@@ -28,7 +28,7 @@ export async function handleBroadcast(
   targets: BroadcastTargets,
   args: BroadcastArgs,
 ): Promise<BroadcastResult> {
-  const body = args.body ?? ''
+  const body = asStringField(args.body, 'broadcast.body')
   if (!body) throw new Error('broadcast: "body" is required')
   enforceBodyCap(body, 'broadcast')
   const act = validateSpeechAct(args.act)

@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { sanitizeId } from '../identity.ts'
-import { type InboxMessage, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
+import { type InboxMessage, asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 import {
   type ThreadSummary,
   addMember,
@@ -26,7 +26,7 @@ export async function handleJoinThread(
   targets: ThreadTargets,
   threadId: string,
 ): Promise<{ thread_id: string; members: string[]; backlog: InboxMessage[] }> {
-  const t = (threadId ?? '').trim()
+  const t = asStringField(threadId, 'thread_id').trim()
   if (!t) throw new Error('join_thread: "thread_id" is required')
   sanitizeId(t, 'join_thread.thread_id')
   const members = await addMember(ctx, { stateRoot: targets.stateRoot }, t, targets.me)
@@ -39,7 +39,7 @@ export async function handleLeaveThread(
   targets: ThreadTargets,
   threadId: string,
 ): Promise<{ thread_id: string; members: string[] }> {
-  const t = (threadId ?? '').trim()
+  const t = asStringField(threadId, 'thread_id').trim()
   if (!t) throw new Error('leave_thread: "thread_id" is required')
   sanitizeId(t, 'leave_thread.thread_id')
   const members = await removeMember(ctx, { stateRoot: targets.stateRoot }, t, targets.me)
@@ -73,8 +73,8 @@ export async function handleSendToThread(
   fanned_out_to: string[]
   failures: string[]
 }> {
-  const threadId = (args.thread_id ?? '').trim()
-  const body = args.body ?? ''
+  const threadId = asStringField(args.thread_id, 'send_to_thread.thread_id').trim()
+  const body = asStringField(args.body, 'send_to_thread.body')
   if (!threadId) throw new Error('send_to_thread: "thread_id" is required')
   if (!body) throw new Error('send_to_thread: "body" is required')
   sanitizeId(threadId, 'send_to_thread.thread_id')

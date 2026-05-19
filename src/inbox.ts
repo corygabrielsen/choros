@@ -17,6 +17,26 @@ export const SWEEP_INTERVAL_MS = 60_000
  *  We use insertion-order Set semantics; on overflow, drop the oldest. */
 export const DROPPED_ACK_DEDUP_CAP = 1024
 
+/**
+ * Coerce an arbitrary value to a string field, rejecting non-string types.
+ *
+ * @remarks
+ * Used at trust boundaries where attacker-controllable input flows into
+ * metadata or filesystem paths. Without this, `String(value ?? '')` would
+ * silently turn `{}` into `"[object Object]"` and corrupt routing — see
+ * the type-coercion bug-hunt finding.
+ *
+ * @param value - The candidate.
+ * @param label - Diagnostic label for error messages.
+ * @returns Empty string when `value` is null/undefined; the string when
+ *   it's a string; throws otherwise.
+ */
+export function asStringField(value: unknown, label: string): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  throw new Error(`${label}: expected string, got ${typeof value}`)
+}
+
 /** Speech-act taxonomy. Optional `act` field on every outbound message.
  *  Borrowed from speech-act theory in linguistics — the type of utterance
  *  carries semantic content distinct from the body. Recipients can route

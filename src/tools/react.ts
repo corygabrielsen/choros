@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { isSelf, sanitizeId } from '../identity.ts'
+import { asStringField } from '../inbox.ts'
 
 export interface ReactArgs {
   msg_id?: string
@@ -20,9 +21,9 @@ export async function handleReact(
   targets: ReactTargets,
   args: ReactArgs,
 ): Promise<{ wrote_to: string }> {
-  const msgId = (args.msg_id ?? '').trim()
-  const emoji = (args.emoji ?? '').trim()
-  const senderSession = (args.from_session ?? '').trim()
+  const msgId = asStringField(args.msg_id, 'react.msg_id').trim()
+  const emoji = asStringField(args.emoji, 'react.emoji').trim()
+  const senderSession = asStringField(args.from_session, 'react.from_session').trim()
   if (!msgId) throw new Error('react: "msg_id" is required')
   if (!emoji) throw new Error('react: "emoji" is required')
   if (!senderSession) throw new Error('react: "from_session" is required')

@@ -3,13 +3,19 @@ import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
 import { recipientLastAgentTurnAgeMs, recipientLiveness } from '../health.ts'
 import { isSelf, parseMentions, resolveRecipient } from '../identity.ts'
-import { enforceBodyCap, validateSpeechAct } from '../inbox.ts'
+import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 
 export interface SendArgs {
   to?: string
   body?: string
   in_reply_to?: string
   act?: string
+  /**
+   * Pre-generated msg_id. Used by {@link handleAsk} so the waiter can be
+   * registered BEFORE the inbox file is written — otherwise a fast reply
+   * could land between send and register and the waiter would miss it.
+   */
+  msg_id?: string
 }
 
 export interface SendTargets {
@@ -35,8 +41,8 @@ export async function handleSend(
   targets: SendTargets,
   args: SendArgs,
 ): Promise<SendResult> {
-  const toArg = (args.to ?? '').trim()
-  const body = args.body ?? ''
+  const toArg = asStringField(args.to, 'send.to').trim()
+  const body = asStringField(args.body, 'send.body')
   if (!toArg) throw new Error('send: "to" is required')
   if (!body) throw new Error('send: "body" is required')
   enforceBodyCap(body, 'send')
@@ -59,7 +65,7 @@ export async function handleSend(
   )
   const isoNow = ctx.clock.nowIso()
   const ts = isoNow.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
-  const id = `${ts}-${targets.me.slice(0, 8)}`
+  const id = args.msg_id ?? `${ts}-${targets.me.slice(0, 8)}`
   const msg: Record<string, unknown> = {
     id,
     from_session: targets.me,

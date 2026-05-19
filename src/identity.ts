@@ -44,10 +44,29 @@ export interface Identity {
     | 'cwd'
 }
 
-/** Resolve this session's identity from env + cwd. Mirrors the multi-source
- *  resolution from server.ts; the lookup order is deterministic and
- *  observable via `source`. */
-export function resolveIdentity(ctx: Pick<Context, 'env' | 'proc'>): Identity {
+/**
+ * Resolve this session's identity from environment, project dir, and cwd.
+ *
+ * @remarks
+ * Lookup order:
+ *  1. `CHOROS_IDENTITY` — explicit override
+ *  2. `CLAUDE_CODE_SESSION_ID` — when UUID-shaped
+ *  3. Newest UUID-shaped `.jsonl` in the project directory derived from
+ *     `CLAUDE_PROJECT_DIR` / `PWD` / cwd. Claude Code does not propagate
+ *     `CLAUDE_CODE_SESSION_ID` to MCP subprocesses, so the newest JSONL
+ *     in our project dir is almost certainly our own session — CC writes
+ *     session metadata there within milliseconds of MCP spawn.
+ *  4. `CLAUDE_PROJECT_DIR` — encoded as identity (legacy, non-UUID)
+ *  5. `PWD` — encoded as identity (legacy)
+ *  6. cwd — encoded as identity (last-resort)
+ *
+ * The `source` field on the returned identity records which step won, so
+ * boot logs and doctor reports can attribute identity provenance.
+ */
+export async function resolveIdentity(
+  ctx: Pick<Context, 'env' | 'proc' | 'fs'>,
+  projectsRoot?: string,
+): Promise<Identity> {
   const explicit = ctx.env.get('CHOROS_IDENTITY')?.trim()
   if (explicit) {
     sanitizeId(explicit, 'CHOROS_IDENTITY')
@@ -56,6 +75,10 @@ export function resolveIdentity(ctx: Pick<Context, 'env' | 'proc'>): Identity {
   const sid = ctx.env.get('CLAUDE_CODE_SESSION_ID')?.trim()
   if (sid && UUID_RE.test(sid)) {
     return { me: sid, meIsUuid: true, source: 'CLAUDE_CODE_SESSION_ID' }
+  }
+  if (projectsRoot) {
+    const newest = await newestSessionJsonl(ctx, projectsRoot)
+    if (newest) return { me: newest, meIsUuid: true, source: 'newest-jsonl-in-project-dir' }
   }
   const projectDir = ctx.env.get('CLAUDE_PROJECT_DIR')?.trim()
   if (projectDir) {
@@ -69,6 +92,44 @@ export function resolveIdentity(ctx: Pick<Context, 'env' | 'proc'>): Identity {
   }
   const id = sanitizeId(encodedCwd(ctx.proc.cwd()).replace(/^-+/, ''), 'cwd')
   return { me: id, meIsUuid: false, source: 'cwd' }
+}
+
+/**
+ * Locate the newest UUID-shaped `.jsonl` in the project directory that
+ * encodes our current cwd. CC writes a session JSONL there on startup;
+ * the newest one is almost certainly ours (within milliseconds of MCP
+ * spawn) when `CLAUDE_CODE_SESSION_ID` isn't propagated.
+ *
+ * @returns The matching session UUID, or `null` if no eligible JSONL exists.
+ */
+export async function newestSessionJsonl(
+  ctx: Pick<Context, 'env' | 'proc' | 'fs'>,
+  projectsRoot: string,
+): Promise<string | null> {
+  const pwd =
+    ctx.env.get('CLAUDE_PROJECT_DIR')?.trim() || ctx.env.get('PWD')?.trim() || ctx.proc.cwd()
+  const projectDir = join(projectsRoot, encodedCwd(pwd))
+  let entries: string[]
+  try {
+    entries = await ctx.fs.readdir(projectDir)
+  } catch {
+    return null
+  }
+  const candidates: Array<{ id: string; mtime: number }> = []
+  for (const name of entries) {
+    if (!name.endsWith('.jsonl')) continue
+    const id = name.slice(0, -'.jsonl'.length)
+    if (!UUID_RE.test(id)) continue
+    try {
+      const s = await ctx.fs.stat(join(projectDir, name))
+      candidates.push({ id, mtime: s.mtimeMs })
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (candidates.length === 0) return null
+  candidates.sort((a, b) => b.mtime - a.mtime)
+  return candidates[0]?.id ?? null
 }
 
 export function encodedCwd(cwd: string): string {
