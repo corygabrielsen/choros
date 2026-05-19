@@ -1,15 +1,33 @@
 {
-  "name": "msg-channel",
-  "module": "index.ts",
-  "type": "module",
+  "name": "choros",
+  "version": "0.17.0",
   "private": true,
+  "type": "module",
+  "module": "src/main.ts",
+  "bin": {
+    "choros": "src/main.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "check": "bun run lint && bun test",
+    "prepare": "simple-git-hooks"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "latest",
+    "simple-git-hooks": "^2.11.1"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+  "simple-git-hooks": {
+    "pre-commit": "bun run check"
   }
 }
