@@ -1,7 +1,7 @@
 import { join } from 'node:path'
-import type { Context } from './effects.ts'
-import { sanitizeId } from './identity.ts'
-import { asStringField } from './inbox.ts'
+import type { Context } from '#choros/effects.ts'
+import { sanitizeId } from '#choros/identity.ts'
+import { asStringField } from '#choros/inbox.ts'
 
 /** How long a single `mcp.notify` is given to settle before being
  *  classified as wedged. The SDK can hang forever on EPIPE; this cap

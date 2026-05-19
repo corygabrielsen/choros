@@ -1,8 +1,8 @@
 import { join } from 'node:path'
-import { atomicWrite, PUSH_TIMEOUT_MS, withTimeout } from './delivery.ts'
-import type { Context } from './effects.ts'
-import { isLivePeer } from './health.ts'
-import { isSelf, listKnownInstances } from './identity.ts'
+import { atomicWrite, PUSH_TIMEOUT_MS, withTimeout } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import { isLivePeer } from '#choros/health.ts'
+import { isSelf, listKnownInstances } from '#choros/identity.ts'
 
 /** Paths + identity needed for presence broadcasts. */
 export interface PresenceTargets {

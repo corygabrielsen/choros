@@ -8,7 +8,7 @@ import type {
   SpawnedChild,
   Spawner,
   StatInfo,
-} from '../../src/effects.ts'
+} from '#choros/effects.ts'
 
 export interface FakeFile {
   content: string

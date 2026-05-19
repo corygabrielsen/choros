@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { AskRegistry } from './ask-registry.ts'
+import type { AskRegistry } from '#choros/ask-registry.ts'
 import {
   JSONL_VERIFY_TIMEOUT_MS,
   jsonlSize,
@@ -7,9 +7,9 @@ import {
   verifyJsonlReceipt,
   type WedgeState,
   writeAckToSender,
-} from './delivery.ts'
-import type { Context } from './effects.ts'
-import { findJsonlForSession } from './identity.ts'
+} from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import { findJsonlForSession } from '#choros/identity.ts'
 
 /** Maximum UTF-8 body size for any outbound message, enforced at every
  *  outbound tool boundary. Blob overflow is intentionally not handled —

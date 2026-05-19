@@ -1,15 +1,19 @@
 import { join } from 'node:path'
-import { atomicWrite } from '../delivery.ts'
-import type { Context } from '../effects.ts'
-import { type RecipientHealth, recipientLastAgentTurnAgeMs, recipientLiveness } from '../health.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import {
+  type RecipientHealth,
+  recipientLastAgentTurnAgeMs,
+  recipientLiveness,
+} from '#choros/health.ts'
 import {
   generateMessageId,
   isSelf,
   parseMentions,
   resolveRecipient,
   sanitizeId,
-} from '../identity.ts'
-import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
+} from '#choros/identity.ts'
+import { asStringField, enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
 
 /** Inputs accepted by `mcp__choros__send`. */
 export interface SendArgs {

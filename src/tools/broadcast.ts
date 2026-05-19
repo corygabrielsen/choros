@@ -1,9 +1,9 @@
 import { join } from 'node:path'
-import { atomicWrite } from '../delivery.ts'
-import type { Context } from '../effects.ts'
-import { generateMessageId, parseMentions } from '../identity.ts'
-import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
-import { liveEligiblePeers } from '../presence.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import { generateMessageId, parseMentions } from '#choros/identity.ts'
+import { asStringField, enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
+import { liveEligiblePeers } from '#choros/presence.ts'
 
 /** Inputs accepted by `mcp__choros__broadcast`. */
 export interface BroadcastArgs {

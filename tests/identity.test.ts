@@ -10,7 +10,7 @@ import {
   resolveRecipient,
   sanitizeId,
   UUID_RE,
-} from '../src/identity.ts'
+} from '#choros/identity.ts'
 import { fakeContext } from './fakes/index.ts'
 
 const STATE = '/state/choros'

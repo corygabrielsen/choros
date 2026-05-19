@@ -1,6 +1,6 @@
-import type { Context } from '../effects.ts'
-import { applyIntent, applyStatus, readAgentState, writeAgentState } from '../heartbeat.ts'
-import { createKeyedMutex } from '../mutex.ts'
+import type { Context } from '#choros/effects.ts'
+import { applyIntent, applyStatus, readAgentState, writeAgentState } from '#choros/heartbeat.ts'
+import { createKeyedMutex } from '#choros/mutex.ts'
 
 /** Path to the per-session `.agent_state` file. */
 export interface SetStateTargets {

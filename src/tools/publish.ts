@@ -1,9 +1,9 @@
 import { join } from 'node:path'
-import { atomicWrite } from '../delivery.ts'
-import type { Context } from '../effects.ts'
-import { generateMessageId, isSelf, listKnownInstances, parseMentions } from '../identity.ts'
-import { asStringField, enforceBodyCap, validateSpeechAct } from '../inbox.ts'
-import { listSubscribers } from './subscribe.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import { generateMessageId, isSelf, listKnownInstances, parseMentions } from '#choros/identity.ts'
+import { asStringField, enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
+import { listSubscribers } from '#choros/tools/subscribe.ts'
 
 /** Inputs accepted by `mcp__choros__publish`. */
 export interface PublishArgs {

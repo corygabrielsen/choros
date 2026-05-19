@@ -6,7 +6,7 @@ import {
   WEDGE_TIMEOUT_THRESHOLD,
   withTimeout,
   writeAckToSender,
-} from '../src/delivery.ts'
+} from '#choros/delivery.ts'
 import { FakeClock, FakeMcp, FakeProc, fakeContext } from './fakes/index.ts'
 
 const STATE = '/state/choros'

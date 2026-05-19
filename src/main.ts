@@ -3,36 +3,41 @@ import { join } from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { emitAck } from './acks.ts'
-import { AskRegistry } from './ask-registry.ts'
-import { cleanupOrphanTmpFiles, type WedgeState } from './delivery.ts'
-import { type Context, type Mcp, realContext } from './effects.ts'
+import { emitAck } from '#choros/acks.ts'
+import { AskRegistry } from '#choros/ask-registry.ts'
+import { cleanupOrphanTmpFiles, type WedgeState } from '#choros/delivery.ts'
+import { type Context, type Mcp, realContext } from '#choros/effects.ts'
 import {
   type AgentState,
   buildHeartbeat,
   HEARTBEAT_INTERVAL_MS,
   readAgentState,
   writeHeartbeat,
-} from './heartbeat.ts'
-import { createNameCache, resolveIdentity, resolveMyNameCached } from './identity.ts'
-import { asStringField, emitInboxMessage } from './inbox.ts'
-import { broadcastPresence, broadcastRename, emitBootRoster, emitPresence } from './presence.ts'
-import { projectsRoot, resolveStateRoot } from './state-root.ts'
-import { handleAsk } from './tools/ask.ts'
-import { handleBroadcast } from './tools/broadcast.ts'
-import { handleDoctor } from './tools/doctor.ts'
-import { handlePublish } from './tools/publish.ts'
-import { handleReact } from './tools/react.ts'
-import { handleSend } from './tools/send.ts'
-import { handleSetIntent, handleSetStatus } from './tools/set_state.ts'
-import { handleSubscribe, handleUnsubscribe } from './tools/subscribe.ts'
+} from '#choros/heartbeat.ts'
+import { createNameCache, resolveIdentity, resolveMyNameCached } from '#choros/identity.ts'
+import { asStringField, emitInboxMessage } from '#choros/inbox.ts'
+import {
+  broadcastPresence,
+  broadcastRename,
+  emitBootRoster,
+  emitPresence,
+} from '#choros/presence.ts'
+import { projectsRoot, resolveStateRoot } from '#choros/state-root.ts'
+import { handleAsk } from '#choros/tools/ask.ts'
+import { handleBroadcast } from '#choros/tools/broadcast.ts'
+import { handleDoctor } from '#choros/tools/doctor.ts'
+import { handlePublish } from '#choros/tools/publish.ts'
+import { handleReact } from '#choros/tools/react.ts'
+import { handleSend } from '#choros/tools/send.ts'
+import { handleSetIntent, handleSetStatus } from '#choros/tools/set_state.ts'
+import { handleSubscribe, handleUnsubscribe } from '#choros/tools/subscribe.ts'
 import {
   handleJoinThread,
   handleLeaveThread,
   handleListThreads,
   handleSendToThread,
-} from './tools/threads.ts'
-import { setupWatcher, type WatcherHandle } from './watcher.ts'
+} from '#choros/tools/threads.ts'
+import { setupWatcher, type WatcherHandle } from '#choros/watcher.ts'
 
 const server = new Server({ name: 'choros', version: '0.28.0' }, { capabilities: { tools: {} } })
 

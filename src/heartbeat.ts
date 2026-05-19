@@ -1,5 +1,5 @@
-import { atomicWrite } from './delivery.ts'
-import type { Context } from './effects.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
 
 /** Cadence at which the bun rewrites its `.heartbeat`. Peers stat this
  *  file to decide liveness; the threshold lives in {@link LIVE_MAX_AGE_MS}. */

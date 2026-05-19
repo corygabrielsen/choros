@@ -1,7 +1,7 @@
-import { atomicWrite } from '../delivery.ts'
-import type { Context } from '../effects.ts'
-import { sanitizeId } from '../identity.ts'
-import { createKeyedMutex } from '../mutex.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import { sanitizeId } from '#choros/identity.ts'
+import { createKeyedMutex } from '#choros/mutex.ts'
 
 /** Path to the per-session `.subscriptions` file. */
 export interface SubscribeTargets {

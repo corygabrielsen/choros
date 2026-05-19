@@ -1,6 +1,6 @@
 import { join } from 'node:path'
-import { PUSH_TIMEOUT_MS, withTimeout } from './delivery.ts'
-import type { Context } from './effects.ts'
+import { PUSH_TIMEOUT_MS, withTimeout } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
 
 type AckKind = 'react' | 'read' | 'ack'
 

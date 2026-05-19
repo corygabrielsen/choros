@@ -1,7 +1,7 @@
 import { join } from 'node:path'
-import { DEAD_AGE_MS, LIVE_MAX_AGE_MS } from './constants.ts'
-import type { Context } from './effects.ts'
-import { findJsonlForSession } from './identity.ts'
+import { DEAD_AGE_MS, LIVE_MAX_AGE_MS } from '#choros/constants.ts'
+import type { Context } from '#choros/effects.ts'
+import { findJsonlForSession } from '#choros/identity.ts'
 
 export { DEAD_AGE_MS, LIVE_MAX_AGE_MS }
 

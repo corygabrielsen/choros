@@ -6,7 +6,7 @@ import {
   readAgentState,
   writeAgentState,
   writeHeartbeat,
-} from '../src/heartbeat.ts'
+} from '#choros/heartbeat.ts'
 import { FakeClock, fakeContext } from './fakes/index.ts'
 
 describe('buildHeartbeat', () => {

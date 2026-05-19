@@ -1,8 +1,8 @@
 import { join } from 'node:path'
-import { atomicWrite } from '../delivery.ts'
-import type { Context } from '../effects.ts'
-import { isSelf, sanitizeId } from '../identity.ts'
-import { asStringField } from '../inbox.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import { isSelf, sanitizeId } from '#choros/identity.ts'
+import { asStringField } from '#choros/inbox.ts'
 
 /** Inputs accepted by `mcp__choros__react`. */
 export interface ReactArgs {

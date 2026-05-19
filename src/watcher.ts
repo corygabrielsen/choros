@@ -1,4 +1,4 @@
-import type { Context, SpawnedChild } from './effects.ts'
+import type { Context, SpawnedChild } from '#choros/effects.ts'
 
 /** Configuration for {@link setupWatcher}. */
 export interface WatcherConfig {

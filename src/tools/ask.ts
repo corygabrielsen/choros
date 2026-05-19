@@ -1,8 +1,8 @@
-import type { AskRegistry } from '../ask-registry.ts'
-import type { Context } from '../effects.ts'
-import { generateMessageId, isSelf, resolveRecipient } from '../identity.ts'
-import { asStringField, type InboxMessage } from '../inbox.ts'
-import { handleSend, type SendTargets } from './send.ts'
+import type { AskRegistry } from '#choros/ask-registry.ts'
+import type { Context } from '#choros/effects.ts'
+import { generateMessageId, isSelf, resolveRecipient } from '#choros/identity.ts'
+import { asStringField, type InboxMessage } from '#choros/inbox.ts'
+import { handleSend, type SendTargets } from '#choros/tools/send.ts'
 
 /** Default timeout for {@link handleAsk} when no `timeout_ms` is given. */
 export const DEFAULT_ASK_TIMEOUT_MS = 60_000

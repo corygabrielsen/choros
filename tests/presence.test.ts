@@ -6,7 +6,7 @@ import {
   emitPresence,
   liveEligiblePeers,
   writePresence,
-} from '../src/presence.ts'
+} from '#choros/presence.ts'
 import { fakeContext } from './fakes/index.ts'
 
 const STATE = '/state/choros'

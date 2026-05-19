@@ -1,8 +1,8 @@
 import { join } from 'node:path'
-import { atomicWrite } from './delivery.ts'
-import type { Context } from './effects.ts'
-import type { InboxMessage } from './inbox.ts'
-import { createKeyedMutex } from './mutex.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import type { InboxMessage } from '#choros/inbox.ts'
+import { createKeyedMutex } from '#choros/mutex.ts'
 
 /** Per-thread on-disk layout (shared, not per-session):
  *

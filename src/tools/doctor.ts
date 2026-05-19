@@ -1,11 +1,11 @@
 import { join } from 'node:path'
-import type { Context } from '../effects.ts'
+import type { Context } from '#choros/effects.ts'
 import {
   type Classification,
   classifyPeerHeartbeat,
   recipientLastAgentTurnAgeMs,
-} from '../health.ts'
-import { listKnownInstances } from '../identity.ts'
+} from '#choros/health.ts'
+import { listKnownInstances } from '#choros/identity.ts'
 
 /** Paths + identity that {@link handleDoctor} needs. */
 export interface DoctorTargets {

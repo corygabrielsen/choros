@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { Context } from './effects.ts'
+import type { Context } from '#choros/effects.ts'
 
 /** Resolve the choros state root. Order:
  *    1. $CHOROS_STATE_HOME (explicit override)

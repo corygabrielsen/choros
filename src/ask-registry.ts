@@ -1,4 +1,4 @@
-import type { InboxMessage } from './inbox.ts'
+import type { InboxMessage } from '#choros/inbox.ts'
 
 /** Registry of in-flight ask() waiters keyed by the question's msg_id.
  *  When an inbound message arrives with in_reply_to === <key>, resolve the

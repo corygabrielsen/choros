@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "module": "src/main.ts",
+  "imports": {
+    "#choros/*": "./src/*"
+  },
   "bin": {
     "choros": "src/main.ts"
   },

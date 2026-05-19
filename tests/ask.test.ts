@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { AskRegistry } from '../src/ask-registry.ts'
-import { handleAsk } from '../src/tools/ask.ts'
+import { AskRegistry } from '#choros/ask-registry.ts'
+import { handleAsk } from '#choros/tools/ask.ts'
 import { fakeContext } from './fakes/index.ts'
 
 const STATE = '/state/choros'

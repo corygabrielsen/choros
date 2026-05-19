@@ -1,6 +1,6 @@
 import { join } from 'node:path'
-import { LIVE_MAX_AGE_MS } from './constants.ts'
-import type { Context } from './effects.ts'
+import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
+import type { Context } from '#choros/effects.ts'
 
 /** RFC 4122 UUID shape — used to distinguish CC session identities
  *  from legacy cwd-encoded identifiers. */

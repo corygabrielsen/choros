@@ -1,8 +1,13 @@
 import { join } from 'node:path'
-import { atomicWrite } from '../delivery.ts'
-import type { Context } from '../effects.ts'
-import { generateMessageId, sanitizeId } from '../identity.ts'
-import { asStringField, enforceBodyCap, type InboxMessage, validateSpeechAct } from '../inbox.ts'
+import { atomicWrite } from '#choros/delivery.ts'
+import type { Context } from '#choros/effects.ts'
+import { generateMessageId, sanitizeId } from '#choros/identity.ts'
+import {
+  asStringField,
+  enforceBodyCap,
+  type InboxMessage,
+  validateSpeechAct,
+} from '#choros/inbox.ts'
 import {
   addMember,
   appendToThread,
@@ -12,7 +17,7 @@ import {
   readThread,
   removeMember,
   type ThreadSummary,
-} from '../threads.ts'
+} from '#choros/threads.ts'
 
 /** Paths + identity needed by the thread tool handlers. */
 export interface ThreadTargets {

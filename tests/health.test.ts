@@ -4,7 +4,7 @@ import {
   isLivePeer,
   LIVE_MAX_AGE_MS,
   recipientLiveness,
-} from '../src/health.ts'
+} from '#choros/health.ts'
 import { fakeContext } from './fakes/index.ts'
 
 const STATE = '/state/choros'

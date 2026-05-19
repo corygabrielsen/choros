@@ -8,13 +8,13 @@ import {
   listThreadsFor,
   readThread,
   removeMember,
-} from '../src/threads.ts'
+} from '#choros/threads.ts'
 import {
   handleJoinThread,
   handleLeaveThread,
   handleListThreads,
   handleSendToThread,
-} from '../src/tools/threads.ts'
+} from '#choros/tools/threads.ts'
 import { fakeContext } from './fakes/index.ts'
 
 const STATE = '/state/choros'

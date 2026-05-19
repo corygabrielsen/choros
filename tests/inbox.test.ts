@@ -7,7 +7,7 @@ import {
   readInboxMessage,
   SPEECH_ACTS,
   validateSpeechAct,
-} from '../src/inbox.ts'
+} from '#choros/inbox.ts'
 import { fakeContext } from './fakes/index.ts'
 
 const STATE = '/state/choros'
