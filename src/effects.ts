@@ -143,9 +143,30 @@ function realFs(): Fs {
     mkdir: (path, opts) => mkdir(path, opts).then(() => undefined),
     existsSync: path => existsSync(path),
     async *readLines(path) {
-      const stream = createReadStream(path, { encoding: 'utf8' })
+      // Wrap the stream so non-existent files (ENOENT) yield nothing
+      // rather than throw. EMFILE / EACCES / EISDIR also surface as
+      // empty yields with stderr — callers can't recover from them
+      // here, but treating "can't read" as "no lines" matches the
+      // contract every consumer expects (display-name lookup returns
+      // null on read failure).
+      let stream: ReturnType<typeof createReadStream>
+      try {
+        stream = createReadStream(path, { encoding: 'utf8' })
+      } catch {
+        return
+      }
+      stream.on('error', err => {
+        const code = (err as NodeJS.ErrnoException)?.code
+        if (code !== 'ENOENT') {
+          process.stderr.write(`[choros] readLines(${path}): ${err.message ?? err}\n`)
+        }
+      })
       const rl = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY })
-      for await (const line of rl) yield line
+      try {
+        for await (const line of rl) yield line
+      } catch {
+        /* stream error already logged via the 'error' handler */
+      }
     },
   }
 }
@@ -162,16 +183,41 @@ function realClock(): Clock {
 }
 
 function realProc(): Proc {
+  // Detect /proc once at module load. On Linux this is always present;
+  // on macOS / BSD it doesn't exist and we use POSIX kill(pid, 0)
+  // instead. The detection avoids ambiguity (on macOS, stat('/proc/X')
+  // returns ENOENT just like a dead pid on Linux).
+  let procFsAvailable: boolean | null = null
+  const detect = async (): Promise<boolean> => {
+    if (procFsAvailable !== null) return procFsAvailable
+    try {
+      await stat('/proc/self')
+      procFsAvailable = true
+    } catch {
+      procFsAvailable = false
+    }
+    return procFsAvailable
+  }
   return {
     pid: () => process.pid,
     cwd: () => process.cwd(),
     async pidAlive(pid) {
       if (!pid || typeof pid !== 'number') return false
+      if (await detect()) {
+        try {
+          await stat(`/proc/${pid}`)
+          return true
+        } catch (e: unknown) {
+          if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return false
+          return true
+        }
+      }
       try {
-        await stat(`/proc/${pid}`)
+        process.kill(pid, 0)
         return true
-      } catch (e: unknown) {
-        if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return false
+      } catch (k: unknown) {
+        const code = (k as NodeJS.ErrnoException)?.code
+        if (code === 'ESRCH') return false
         return true
       }
     },

@@ -70,7 +70,13 @@ let atomicWriteCounter = 0
 
 /** Tmp+rename so concurrent readers never see a half-written payload.
  *  The tmp filename includes pid AND a monotonic counter so two writers
- *  from the same process never collide on the tmp path. */
+ *  from the same process never collide on the tmp path.
+ *
+ *  @remarks
+ *  The tmp file is created next to the destination so the rename is
+ *  almost always intra-filesystem. If a future deployment puts the
+ *  state root and tmp on different filesystems (EXDEV), the writeFile
+ *  fallback below preserves correctness at the cost of atomicity. */
 export async function atomicWrite(
   ctx: Pick<Context, 'fs' | 'proc'>,
   path: string,
@@ -79,7 +85,24 @@ export async function atomicWrite(
   atomicWriteCounter = (atomicWriteCounter + 1) & 0xffffffff
   const tmp = `${path}.${ctx.proc.pid()}.${atomicWriteCounter}.tmp`
   await ctx.fs.writeFile(tmp, content)
-  await ctx.fs.rename(tmp, path)
+  try {
+    await ctx.fs.rename(tmp, path)
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException)?.code === 'EXDEV') {
+      // Cross-device rename. Fall back to writeFile + unlink — loses
+      // atomicity but at least the file lands. Operators putting the
+      // state root on a different fs from tmp should pick a tmp dir
+      // on the same fs; this fallback is just a safety net.
+      await ctx.fs.writeFile(path, content)
+      try {
+        await ctx.fs.unlink(tmp)
+      } catch {
+        /* already gone or never created */
+      }
+      return
+    }
+    throw e
+  }
 }
 
 /** Poll an own-CC JSONL for a substring match on msg_id. Uses an append-only

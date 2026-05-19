@@ -7,7 +7,13 @@ import { emitAck } from './acks.ts'
 import { AskRegistry } from './ask-registry.ts'
 import type { WedgeState } from './delivery.ts'
 import { type Context, type Mcp, realContext } from './effects.ts'
-import { HEARTBEAT_INTERVAL_MS, buildHeartbeat, writeHeartbeat } from './heartbeat.ts'
+import {
+  type AgentState,
+  HEARTBEAT_INTERVAL_MS,
+  buildHeartbeat,
+  readAgentState,
+  writeHeartbeat,
+} from './heartbeat.ts'
 import { createNameCache, resolveIdentity, resolveMyNameCached } from './identity.ts'
 import { asStringField, emitInboxMessage } from './inbox.ts'
 import { broadcastPresence, broadcastRename, emitBootRoster, emitPresence } from './presence.ts'
@@ -27,7 +33,7 @@ import {
   handleSendToThread,
 } from './tools/threads.ts'
 
-const server = new Server({ name: 'choros', version: '0.25.0' }, { capabilities: { tools: {} } })
+const server = new Server({ name: 'choros', version: '0.26.0' }, { capabilities: { tools: {} } })
 
 const mcpAdapter: Mcp = {
   async notify(method, params) {
@@ -97,6 +103,10 @@ const inFlightEmits = new Set<string>()
 const askRegistry = new AskRegistry()
 const nameCache = createNameCache()
 let myName = await resolveMyNameCached(ctx, identity, PROJECTS_ROOT, nameCache)
+// Inherit any status/intent the previous bun lifetime persisted, so a
+// /rename or set_status survives a restart. The agent can still call
+// set_status/set_intent at any time to override.
+let agentState: AgentState = await readAgentState(ctx, AGENT_STATE_PATH)
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -267,7 +277,11 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
 async function tickHeartbeat(): Promise<void> {
   const previousName = myName
   myName = await resolveMyNameCached(ctx, identity, PROJECTS_ROOT, nameCache)
-  const hb = buildHeartbeat(ctx, {})
+  // Re-read agent state each tick so updates from set_status / set_intent
+  // (which atomicWrite to .agent_state) propagate without keeping a
+  // separate in-memory copy that could drift from disk.
+  agentState = await readAgentState(ctx, AGENT_STATE_PATH)
+  const hb = buildHeartbeat(ctx, agentState)
   try {
     await writeHeartbeat(ctx, HEARTBEAT_PATH, hb)
   } catch (e: unknown) {
@@ -334,6 +348,21 @@ inboxWatcher.onStdout(chunk => {
   }
 })
 
+// Boot pre-scan of presence/. Peers may have written .hello/.goodbye/
+// .rename files while this bun was offline; without the prescan, those
+// events would sit on disk until something modified the dir (which may
+// never happen). Each entry is dispatched through the same emitPresence
+// path the inotify watcher uses — emitPresence is idempotent and
+// unlinks after emit.
+try {
+  const existingPresence = await ctx.fs.readdir(MY_PRESENCE)
+  for (const f of existingPresence.sort()) {
+    if (f.startsWith('.')) continue
+    void emitPresence(ctx, MY_PRESENCE, ME, f)
+  }
+} catch {
+  /* dir doesn't exist yet — created above */
+}
 const presenceWatcher = ctx.spawner.spawn('inotifywait', [
   '-m',
   '-q',
@@ -482,7 +511,7 @@ process.on('SIGTERM', () => {
 })
 
 ctx.proc.stderr(
-  `[choros] v0.25 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
+  `[choros] v0.26 channel up: session=${ME} (source=${identity.source}) name="${myName}"\n` +
     `[choros] inbox=${MY_INBOX} heartbeat=${HEARTBEAT_PATH} pid=${ctx.proc.pid()}\n` +
     `[choros] presence broadcast to ${helloPeers.length} live peer(s)\n`,
 )

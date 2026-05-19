@@ -43,6 +43,19 @@ function metaPath(stateRoot: string, rootId: string): string {
   return join(threadDir(stateRoot, rootId), 'meta.json')
 }
 
+/**
+ * Per-thread count of msg files that failed to parse during the most
+ * recent {@link readThread}. Surfaces silent corruption (otherwise
+ * skipped silently) to monitors without throwing inside readThread.
+ */
+const lastCorruptParseCount = new Map<string, number>()
+
+/** Return the number of msg-file parse failures observed in the last
+ *  {@link readThread} for this thread. Zero when the read was clean. */
+export function corruptMessagesIn(rootId: string): number {
+  return lastCorruptParseCount.get(rootId) ?? 0
+}
+
 /** Ensure the thread dir exists. Idempotent — first writer creates meta;
  *  subsequent calls leave it. */
 export async function ensureThread(
@@ -94,14 +107,16 @@ export async function readThread(
     return []
   }
   const msgs: InboxMessage[] = []
+  let corrupt = 0
   for (const e of entries) {
     if (!e.endsWith('.json')) continue
     try {
       msgs.push(JSON.parse(await ctx.fs.readFile(join(dir, e))) as InboxMessage)
     } catch {
-      /* skip unparseable */
+      corrupt++
     }
   }
+  lastCorruptParseCount.set(rootId, corrupt)
   msgs.sort((a, b) => {
     if (a.ts && b.ts) return a.ts.localeCompare(b.ts)
     return a.id.localeCompare(b.id)
@@ -244,6 +259,13 @@ export async function listThreadsFor(
       last_ts: msgs.at(-1)?.ts,
     })
   }
-  out.sort((a, b) => (b.last_ts ?? '').localeCompare(a.last_ts ?? ''))
+  // Most-recent-activity first. Tiebreak by root_msg_id so threads
+  // with no messages or identical timestamps appear in a deterministic
+  // order across calls.
+  out.sort((a, b) => {
+    const c = (b.last_ts ?? '').localeCompare(a.last_ts ?? '')
+    if (c !== 0) return c
+    return a.root_msg_id.localeCompare(b.root_msg_id)
+  })
   return out
 }

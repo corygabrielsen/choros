@@ -197,19 +197,26 @@ async function emitInboxMessageInner(
   if (!data) return { status: 'skipped' }
   if (askRegistry) askRegistry.notifyIfWaiting(data)
   void filename
-  const msgId = String(data.id ?? '')
+  // Stringify only fields known to be string-shaped. Non-string fields
+  // are not coerced (would yield "[object Object]" and corrupt meta);
+  // they are dropped from the meta entirely.
+  const safeString = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+  const msgId = safeString(data.id) ?? ''
   const meta: Record<string, string> = {
     source: 'choros',
     msg_id: msgId,
-    ts: String(data.ts ?? ''),
-    from_session: String(data.from_session ?? ''),
-    from_name: String(data.from_name ?? 'unknown'),
-    from_host: String(data.from_host ?? ''),
-    from_cwd: String(data.from_cwd ?? ''),
+    ts: safeString(data.ts) ?? '',
+    from_session: safeString(data.from_session) ?? '',
+    from_name: safeString(data.from_name) ?? 'unknown',
+    from_host: safeString(data.from_host) ?? '',
+    from_cwd: safeString(data.from_cwd) ?? '',
   }
-  if (data.in_reply_to) meta.in_reply_to = String(data.in_reply_to)
-  if (data.thread_id) meta.thread_id = String(data.thread_id)
-  if (data.topic) meta.topic = String(data.topic)
+  const irt = safeString(data.in_reply_to)
+  if (irt) meta.in_reply_to = irt
+  const tid = safeString(data.thread_id)
+  if (tid) meta.thread_id = tid
+  const top = safeString(data.topic)
+  if (top) meta.topic = top
   if (data.broadcast) meta.broadcast = 'true'
   if (data.act) meta.act = data.act
   if (Array.isArray(data.mentions) && data.mentions.length > 0) {
