@@ -31,9 +31,9 @@ export interface BroadcastResult {
  *
  * @remarks
  * Live-peer enumeration applies three-layer self-exclusion (UUID + name
- * + heartbeat pid) and the v0.17 pid-alive check so a freshly-exited
- * peer with a still-fresh heartbeat is excluded. Per-peer inbox writes
- * are parallelized via {@link Promise.all}.
+ * + heartbeat pid) and the pid-alive check so a freshly-exited peer with
+ * a still-fresh heartbeat is excluded. Per-peer inbox writes are
+ * parallelized via {@link Promise.all}.
  *
  * @throws When `body` is empty or exceeds the body cap, or when `act`
  *   is not in the {@link SPEECH_ACTS} taxonomy.

@@ -55,8 +55,8 @@ export async function handlePublish(
   const known = await listKnownInstances(ctx, targets.stateRoot, targets.projectsRoot)
   const subscribers: string[] = []
   for (const k of known) {
-    // Three-layer self-exclusion (v0.17 invariant) — must not deliver a
-    // publish to ourselves even if we subscribed to our own topic.
+    // Three-layer self-exclusion — must not deliver a publish to
+    // ourselves even if we subscribed to our own topic.
     if (await isSelf(ctx, targets.stateRoot, targets.me, targets.myName, k.id, k.name)) continue
     if (await listSubscribers(ctx, targets.stateRoot, k.id, topic)) subscribers.push(k.id)
   }

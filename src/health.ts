@@ -38,7 +38,8 @@ export async function recipientLastAgentTurnAgeMs(
  *   has timed out ≥ {@link WEDGE_TIMEOUT_THRESHOLD} times).
  * - `stale`: heartbeat older than {@link LIVE_MAX_AGE_MS} but bun alive.
  * - `dead`: heartbeat older than {@link DEAD_AGE_MS}, OR fresh heartbeat
- *   but bun pid is gone (the v0.17 ghost-peer case).
+ *   but bun pid is gone (ghost peer — heartbeat outlives the writer
+ *   because the kernel doesn't invalidate mtime on process death).
  * - `none`: no heartbeat ever observed.
  */
 export type Classification = 'live' | 'paused' | 'wedged' | 'stale' | 'dead' | 'none'
@@ -71,9 +72,9 @@ export async function isLivePeer(
   }
 }
 
-/** Classify a peer for doctor output. The `dead` class now also covers
- *  the fresh-mtime + dead-pid case — pre-v0.17 that combination falsely
- *  rendered as `live`. */
+/** Classify a peer for doctor output. The `dead` class covers the
+ *  fresh-mtime + dead-pid case — without the pid check that combination
+ *  would falsely render as `live`. */
 export function classifyPeerHeartbeat(
   heartbeatAgeMs: number | undefined,
   hasWedge: boolean,
@@ -95,8 +96,7 @@ export function classifyPeerHeartbeat(
  *
  * @remarks
  * `unknown` is reserved for "no heartbeat file at all"; a heartbeat-fresh
- * but pid-dead recipient surfaces as `stale` (was previously `live`
- * before the v0.17 fix).
+ * but pid-dead recipient surfaces as `stale`.
  */
 export interface RecipientHealth {
   status: 'live' | 'stale' | 'wedged' | 'unknown'
@@ -108,8 +108,8 @@ export interface RecipientHealth {
 
 /** Probe a recipient's health for inclusion in send-tool response. Returns
  *  `unknown` if there is no heartbeat file; `stale` when the heartbeat is
- *  fresh but the bun process is gone (the v0.17 invariant); `wedged` when
- *  fresh+alive but `.wedged` marker present; `live` otherwise. */
+ *  fresh but the bun process is gone; `wedged` when fresh+alive but
+ *  `.wedged` marker present; `live` otherwise. */
 export async function recipientLiveness(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc'>,
   stateRoot: string,

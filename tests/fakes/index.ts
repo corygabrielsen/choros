@@ -127,6 +127,17 @@ export class FakeFs implements Fs {
     return this.files.has(path) || this.dirs.has(path)
   }
 
+  async readBytesFromOffset(path: string, offset: number, length: number): Promise<string> {
+    const f = this.files.get(path)
+    if (!f) {
+      const err = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException
+      err.code = 'ENOENT'
+      throw err
+    }
+    if (length <= 0) return ''
+    return f.content.slice(offset, offset + length)
+  }
+
   async *readLines(path: string): AsyncIterable<string> {
     const f = this.files.get(path)
     if (!f) return

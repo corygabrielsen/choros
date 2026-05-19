@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process'
 import { createReadStream, existsSync, unlinkSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir, hostname } from 'node:os'
 import { createInterface } from 'node:readline'
 
@@ -31,6 +31,10 @@ export interface Fs {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>
   existsSync(path: string): boolean
   readLines(path: string): AsyncIterable<string>
+  /** Read exactly `length` bytes from `offset` as UTF-8. Used by
+   *  {@link verifyJsonlReceipt} to read only the delta between polls
+   *  rather than the whole (multi-MB) file each tick. */
+  readBytesFromOffset(path: string, offset: number, length: number): Promise<string>
 }
 
 /**
@@ -49,8 +53,8 @@ export interface Clock {
  *
  * @remarks
  * `pidAlive` distinguishes "heartbeat freshly written by a now-dead bun"
- * from "live bun" — the v0.17 invariant — and is the only Linux-specific
- * piece of the interface (production implementation reads `/proc/<pid>`).
+ * from "live bun" and is the only Linux-specific piece of the interface
+ * (production implementation reads `/proc/<pid>`).
  */
 export interface Proc {
   pid(): number
@@ -142,6 +146,17 @@ function realFs(): Fs {
     unlinkSync: path => unlinkSync(path),
     mkdir: (path, opts) => mkdir(path, opts).then(() => undefined),
     existsSync: path => existsSync(path),
+    async readBytesFromOffset(path, offset, length) {
+      if (length <= 0) return ''
+      const fh = await open(path, 'r')
+      try {
+        const buf = Buffer.alloc(length)
+        const { bytesRead } = await fh.read(buf, 0, length, offset)
+        return buf.toString('utf8', 0, bytesRead)
+      } finally {
+        await fh.close()
+      }
+    },
     async *readLines(path) {
       // Wrap the stream so non-existent files (ENOENT) yield nothing
       // rather than throw. EMFILE / EACCES / EISDIR also surface as

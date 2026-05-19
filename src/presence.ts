@@ -74,9 +74,9 @@ export async function broadcastRename(
   return peers
 }
 
-/** Enumerate live peers, applying three-layer self-exclusion + the v0.17
- *  pid-alive liveness check. Returns the list (used by broadcastPresence
- *  for fan-out AND by the boot-roster for the agent's first-seen view). */
+/** Enumerate live peers, applying three-layer self-exclusion + pid-alive
+ *  liveness. Returns the list (used by broadcastPresence for fan-out AND
+ *  by the boot-roster for the agent's first-seen view). */
 export async function liveEligiblePeers(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
   targets: PresenceTargets,

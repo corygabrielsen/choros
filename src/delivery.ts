@@ -63,9 +63,8 @@ export async function withTimeout<T>(
 }
 
 // Monotonic counter to disambiguate concurrent atomicWrite calls from the
-// same pid. Without this, two writers racing on the same path produced
-// identical tmp filenames; one overwrote the other's tmp and only one
-// rename's content survived.
+// same pid. Two writers from the same pid on the same path would otherwise
+// produce identical tmp filenames and one rename's content would be lost.
 let atomicWriteCounter = 0
 
 /** Tmp+rename so concurrent readers never see a half-written payload.
@@ -124,13 +123,17 @@ export async function verifyJsonlReceipt(
     startSize = 0
   }
   const deadline = ctx.clock.nowMs() + timeoutMs
+  let cursor = startSize
   while (ctx.clock.nowMs() < deadline) {
     try {
       const s = await ctx.fs.stat(jsonl)
-      if (s.size > startSize) {
-        const raw = await ctx.fs.readFile(jsonl)
-        const tail = raw.length > startSize ? raw.slice(startSize) : ''
-        if (tail.includes(msgId)) return true
+      if (s.size > cursor) {
+        // Read only the delta bytes since the last poll. Reading the
+        // whole file each tick would be O(file size × poll count) per
+        // delivery — on a 2MB JSONL × 20 polls, 40MB of useless traffic.
+        const delta = await ctx.fs.readBytesFromOffset(jsonl, cursor, s.size - cursor)
+        if (delta.includes(msgId)) return true
+        cursor = s.size
       }
     } catch {
       /* keep polling */

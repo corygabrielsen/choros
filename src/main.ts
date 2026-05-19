@@ -414,8 +414,8 @@ try {
 // The ack watcher is non-critical (inbox + presence are the load-bearing
 // ones) but if it stays dead silently, choros-ack/read/reaction events
 // stop firing and the agent doesn't learn delivery state. Respawn on
-// non-shutdown exit, bounded to a few attempts so we don't loop forever
-// against a permanent fs error.
+// non-shutdown exit, bounded to a few attempts to avoid an infinite
+// respawn loop against a permanent fs error.
 let ackWatcherRespawns = 0
 const ACK_WATCHER_RESPAWN_CAP = 5
 function spawnAckWatcher(): ReturnType<typeof ctx.spawner.spawn> {

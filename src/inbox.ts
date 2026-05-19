@@ -28,9 +28,9 @@ export const DROPPED_ACK_DEDUP_CAP = 1024
  *
  * @remarks
  * Used at trust boundaries where attacker-controllable input flows into
- * metadata or filesystem paths. Without this, `String(value ?? '')` would
- * silently turn `{}` into `"[object Object]"` and corrupt routing — see
- * the type-coercion bug-hunt finding.
+ * metadata or filesystem paths. Rejects rather than coerces: a naive
+ * `String(value ?? '')` would turn `{}` into `"[object Object]"` and
+ * poison filesystem paths and routing keys.
  *
  * @param value - The candidate.
  * @param label - Diagnostic label for error messages.

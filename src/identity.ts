@@ -182,16 +182,10 @@ export async function findJsonlForSession(
 
 /** Read the latest custom-title (preferred) or ai-title from a JSONL.
  *
- *  We want the MOST RECENT title event — read the file then walk lines
- *  in reverse, returning on the first match. Walking forward would scan
- *  the entire (multi-MB) file every call; reverse + early-exit means we
- *  typically read only the last few KB.
- *
- *  The forward scan was a hot path for resolveMyName (every heartbeat
- *  tick + every tool handler) and listKnownInstances (every doctor /
- *  publish / broadcast). At 5MB JSONL × 5 peers × 1 doctor call =
- *  25MB of file I/O per doctor — backwards-scan-with-early-exit cuts
- *  that to ~5-50KB. */
+ *  Walks lines in reverse and returns on the first match so the typical
+ *  call reads only the last few KB of a multi-MB file. Called from every
+ *  heartbeat tick, every tool handler, and every doctor / publish /
+ *  broadcast peer enumeration — must stay sublinear in file size. */
 export async function readDisplayNameForJsonl(
   ctx: Pick<Context, 'fs'>,
   jsonl: string | null,
@@ -273,8 +267,7 @@ export function createNameCache(): NameCache {
  * @remarks
  * Returns the cached value when the JSONL mtime is unchanged since the
  * last call; otherwise re-scans. Hot path: every heartbeat tick + every
- * tool handler. Before this cache the bun re-scanned multi-MB JSONLs
- * dozens of times per second under load.
+ * tool handler.
  */
 export async function resolveMyNameCached(
   ctx: Pick<Context, 'fs' | 'env' | 'proc' | 'clock'>,
@@ -391,11 +384,10 @@ export async function listKnownInstances(
 /** Resolve a recipient handle to a known instance dir.
  *
  *  Order: exact UUID > display name (live preferred) > legacy dirname >
- *  UUID prefix > fall-through (creates a new dir).
- *
- *  The order was reworked in v0.5 to fix a shadow bug: previously a legacy
- *  non-UUID dir would shadow a live session that had `/rename`'d to the
- *  same target, because legacy-id-match ran before name lookup. */
+ *  UUID prefix > fall-through (creates a new dir). Display-name match
+ *  must run before legacy-dirname match: a non-UUID dir whose name
+ *  collides with a live session's display name would otherwise shadow
+ *  the live session. */
 export async function resolveRecipient(
   ctx: Pick<Context, 'fs' | 'env' | 'proc'>,
   stateRoot: string,
