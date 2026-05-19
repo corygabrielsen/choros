@@ -205,6 +205,21 @@ describe('handlePublish', () => {
     const r = await handlePublish(ctx, sendTargets, { topic: 'room-a', body: 'hi' })
     expect(r.delivered_to).toEqual([])
   })
+
+  test('skips a peer that shares my display name (3-layer self-exclusion)', async () => {
+    const ctx = fakeContext()
+    const peerId = '99999999-9999-9999-9999-999999999999'
+    await seedLivePeer(ctx, peerId, 12345)
+    // Peer's JSONL has the same custom-title as us — name collision
+    await ctx.fs.writeFile(
+      `${PROJECTS}/-x/${peerId}.jsonl`,
+      JSON.stringify({ type: 'custom-title', customTitle: MY_NAME }),
+    )
+    ctx.env.vars.PWD = '/x'
+    await ctx.fs.writeFile(`${STATE}/${peerId}/.subscriptions`, JSON.stringify(['room-a']))
+    const r = await handlePublish(ctx, sendTargets, { topic: 'room-a', body: 'hi' })
+    expect(r.delivered_to).toEqual([])
+  })
 })
 
 describe('handleDoctor', () => {

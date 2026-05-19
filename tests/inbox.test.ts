@@ -95,7 +95,14 @@ describe('emitInboxMessage', () => {
       `${targets.inboxDir}/${filename}`,
       JSON.stringify({ id: 'm1', body: 'hi', from_session: sender, ts: 'T' }),
     )
-    const r = await emitInboxMessage(ctx, targets, wedge, emittedDropped, filename)
+    const r = await emitInboxMessage(
+      ctx,
+      targets,
+      wedge,
+      emittedDropped,
+      new Set<string>(),
+      filename,
+    )
     expect(r.status).toBe('emitted')
     expect(ctx.fs.existsSync(`${targets.inboxDir}/${filename}.seen`)).toBe(true)
     expect(ctx.fs.existsSync(`${STATE}/${sender}/sent_acks/m1.ack`)).toBe(true)
@@ -106,7 +113,14 @@ describe('emitInboxMessage', () => {
     const filename = 'm1.json'
     await ctx.fs.writeFile(`${targets.inboxDir}/${filename}`, JSON.stringify({ id: 'm1' }))
     await ctx.fs.writeFile(`${targets.inboxDir}/${filename}.seen`, 'already')
-    const r = await emitInboxMessage(ctx, targets, wedge, emittedDropped, filename)
+    const r = await emitInboxMessage(
+      ctx,
+      targets,
+      wedge,
+      emittedDropped,
+      new Set<string>(),
+      filename,
+    )
     expect(r.status).toBe('skipped')
     expect(ctx.mcp.notifications.length).toBe(0)
   })
@@ -123,7 +137,14 @@ describe('emitInboxMessage', () => {
       `${targets.inboxDir}/${filename}`,
       JSON.stringify({ id: 'm1', body: 'hi', from_session: sender, ts: 'T' }),
     )
-    const running = emitInboxMessage(ctx, targets, wedge, emittedDropped, filename)
+    const running = emitInboxMessage(
+      ctx,
+      targets,
+      wedge,
+      emittedDropped,
+      new Set<string>(),
+      filename,
+    )
     // Advance virtual clock past the JSONL verify timeout
     for (let i = 0; i < 30; i++) {
       await new Promise(r => setTimeout(r, 5))
@@ -142,7 +163,7 @@ describe('emitInboxMessage', () => {
       `${targets.inboxDir}/${filename}`,
       JSON.stringify({ id: 'm1', body: 'is it ready?', act: 'QUESTION' }),
     )
-    await emitInboxMessage(ctx, targets, wedge, emittedDropped, filename)
+    await emitInboxMessage(ctx, targets, wedge, emittedDropped, new Set<string>(), filename)
     const params = ctx.mcp.notifications[0]?.params as { meta?: Record<string, string> }
     expect(params?.meta?.act).toBe('QUESTION')
   })
@@ -159,7 +180,7 @@ describe('emitInboxMessage', () => {
         mentions: [ME],
       }),
     )
-    await emitInboxMessage(ctx, targets, wedge, emittedDropped, filename)
+    await emitInboxMessage(ctx, targets, wedge, emittedDropped, new Set<string>(), filename)
     const notification = ctx.mcp.notifications[0]
     const params = notification?.params as { meta?: Record<string, string> }
     expect(params?.meta?.mentioned_me).toBe('true')

@@ -40,6 +40,22 @@ describe('FakeFs', () => {
     await fs.writeFile('/t', 'y')
     expect((await fs.stat('/t')).mtimeMs).toBe(1500)
   })
+
+  test('readLines does NOT yield a trailing empty for newline-terminated content', async () => {
+    const fs = new FakeFs()
+    await fs.writeFile('/t', 'line1\nline2\n')
+    const out: string[] = []
+    for await (const line of fs.readLines('/t')) out.push(line)
+    expect(out).toEqual(['line1', 'line2'])
+  })
+
+  test('readLines preserves empty lines in the middle of content', async () => {
+    const fs = new FakeFs()
+    await fs.writeFile('/t', 'line1\n\nline3\n')
+    const out: string[] = []
+    for await (const line of fs.readLines('/t')) out.push(line)
+    expect(out).toEqual(['line1', '', 'line3'])
+  })
 })
 
 describe('FakeClock', () => {

@@ -101,8 +101,15 @@ export async function handleSendToThread(
   await ctx.fs.writeFile(join(targets.mySentDir, `${id}.json`), JSON.stringify(msg, null, 2))
 
   const members = await listMembers(ctx, { stateRoot: targets.stateRoot }, threadId)
-  const recipients = members.filter(m => m !== targets.me)
-  for (const peerId of recipients) {
+  const recipients: string[] = []
+  for (const peerId of members) {
+    if (peerId === targets.me) continue
+    try {
+      sanitizeId(peerId, 'send_to_thread.member')
+    } catch {
+      continue
+    }
+    recipients.push(peerId)
     const inboxDir = join(targets.stateRoot, peerId, 'inbox')
     await ctx.fs.mkdir(inboxDir, { recursive: true })
     await atomicWrite(

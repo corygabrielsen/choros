@@ -1,5 +1,6 @@
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
+import { sanitizeId } from '../identity.ts'
 
 export interface SubscribeTargets {
   subscriptionsPath: string
@@ -56,6 +57,7 @@ export async function listSubscribers(
   peerId: string,
   topic: string,
 ): Promise<boolean> {
+  sanitizeId(peerId, 'listSubscribers.peerId')
   const set = await readSubscriptions(ctx, `${stateRoot}/${peerId}/.subscriptions`)
   return set.has(topic)
 }

@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { atomicWrite } from '../delivery.ts'
 import type { Context } from '../effects.ts'
-import { listKnownInstances, parseMentions } from '../identity.ts'
+import { isSelf, listKnownInstances, parseMentions } from '../identity.ts'
 import { enforceBodyCap, validateSpeechAct } from '../inbox.ts'
 import { listSubscribers } from './subscribe.ts'
 
@@ -40,7 +40,9 @@ export async function handlePublish(
   const known = await listKnownInstances(ctx, targets.stateRoot, targets.projectsRoot)
   const subscribers: string[] = []
   for (const k of known) {
-    if (k.id === targets.me) continue
+    // Three-layer self-exclusion (v0.17 invariant) — must not deliver a
+    // publish to ourselves even if we subscribed to our own topic.
+    if (await isSelf(ctx, targets.stateRoot, targets.me, targets.myName, k.id, k.name)) continue
     if (await listSubscribers(ctx, targets.stateRoot, k.id, topic)) subscribers.push(k.id)
   }
   const mentions = await parseMentions(

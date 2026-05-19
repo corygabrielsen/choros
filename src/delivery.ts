@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import type { Context } from './effects.ts'
+import { sanitizeId } from './identity.ts'
 
 export const PUSH_TIMEOUT_MS = 5_000
 export const JSONL_VERIFY_TIMEOUT_MS = 5_000
@@ -46,13 +47,22 @@ export async function withTimeout<T>(
   }
 }
 
-/** Tmp+rename so concurrent readers never see a half-written payload. */
+// Monotonic counter to disambiguate concurrent atomicWrite calls from the
+// same pid. Without this, two writers racing on the same path produced
+// identical tmp filenames; one overwrote the other's tmp and only one
+// rename's content survived.
+let atomicWriteCounter = 0
+
+/** Tmp+rename so concurrent readers never see a half-written payload.
+ *  The tmp filename includes pid AND a monotonic counter so two writers
+ *  from the same process never collide on the tmp path. */
 export async function atomicWrite(
   ctx: Pick<Context, 'fs' | 'proc'>,
   path: string,
   content: string,
 ): Promise<void> {
-  const tmp = `${path}.${ctx.proc.pid()}.tmp`
+  atomicWriteCounter = (atomicWriteCounter + 1) & 0xffffffff
+  const tmp = `${path}.${ctx.proc.pid()}.${atomicWriteCounter}.tmp`
   await ctx.fs.writeFile(tmp, content)
   await ctx.fs.rename(tmp, path)
 }
@@ -175,6 +185,14 @@ export async function writeAckToSender(
   const msgId = String(msg.id ?? '')
   if (!fromSession || !msgId) return 'skipped'
   if (fromSession === targets.me) return 'skipped'
+  // Sanitize before path construction: from_session arrives from inbound msg
+  // body, can be attacker-controlled, must not contain ../ or path separators.
+  try {
+    sanitizeId(fromSession, 'writeAckToSender.from_session')
+    sanitizeId(msgId, 'writeAckToSender.msg_id')
+  } catch {
+    return 'skipped'
+  }
   const ext = status === 'delivered' ? 'ack' : 'dropped'
   const otherExt = ext === 'ack' ? 'dropped' : 'ack'
   const senderAcksDir = join(targets.stateRoot, fromSession, 'sent_acks')

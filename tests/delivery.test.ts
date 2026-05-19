@@ -63,10 +63,15 @@ describe('atomicWrite', () => {
     expect(ctx.fs.renamePairs[0]?.from).toContain('.tmp')
   })
 
-  test('tmp file disambiguates by pid', async () => {
+  test('tmp file includes pid AND a monotonic counter (no collisions)', async () => {
     const ctx = fakeContext()
     await atomicWrite(ctx, '/state/foo', 'a')
-    expect(ctx.fs.renamePairs[0]?.from).toBe(`/state/foo.${ctx.proc.pid()}.tmp`)
+    await atomicWrite(ctx, '/state/bar', 'b')
+    const tmpA = ctx.fs.renamePairs[0]?.from
+    const tmpB = ctx.fs.renamePairs[1]?.from
+    expect(tmpA).toMatch(new RegExp(`^/state/foo\\.${ctx.proc.pid()}\\.\\d+\\.tmp$`))
+    expect(tmpB).toMatch(new RegExp(`^/state/bar\\.${ctx.proc.pid()}\\.\\d+\\.tmp$`))
+    expect(tmpA).not.toBe(tmpB)
   })
 })
 

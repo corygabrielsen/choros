@@ -130,7 +130,12 @@ export class FakeFs implements Fs {
   async *readLines(path: string): AsyncIterable<string> {
     const f = this.files.get(path)
     if (!f) return
-    const lines = f.content.split('\n')
+    // node:readline does NOT yield a trailing empty line when content ends
+    // with '\n'. Match that — split('\n').filter(...) would also drop empty
+    // lines in the middle, which we don't want. Drop only the final empty
+    // produced by a terminal newline.
+    const parts = f.content.split('\n')
+    const lines = parts.length > 0 && parts[parts.length - 1] === '' ? parts.slice(0, -1) : parts
     for (const line of lines) yield line
   }
 }

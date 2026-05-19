@@ -65,6 +65,7 @@ for (const dir of [MY_INBOX, MY_READ, MY_SENT, MY_ACKS, MY_PRESENCE]) {
 
 const wedge: WedgeState = { consecutiveTimeouts: 0 }
 const droppedAcksEmitted = new Set<string>()
+const inFlightEmits = new Set<string>()
 const askRegistry = new AskRegistry()
 let myName = await resolveMyName(ctx, identity, PROJECTS_ROOT)
 
@@ -298,6 +299,7 @@ inboxWatcher.onStdout(chunk => {
       },
       wedge,
       droppedAcksEmitted,
+      inFlightEmits,
       filename,
       askRegistry,
     )

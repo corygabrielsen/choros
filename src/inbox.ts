@@ -96,12 +96,18 @@ export async function emitInboxMessage(
   targets: InboxTargets,
   wedgeState: WedgeState,
   emittedDroppedAcks: Set<string>,
+  inFlight: Set<string>,
   filename: string,
   askRegistry?: AskRegistry,
 ): Promise<EmitResult> {
   if (!filename.endsWith('.json')) return { status: 'skipped' }
   if (filename.startsWith('.')) return { status: 'skipped' }
   if (filename.endsWith('.seen')) return { status: 'skipped' }
+  // Re-entry guard: inotify can fire twice on the same file (close_write +
+  // moved_to); a periodic sweep can race the watcher. Two concurrent emits
+  // for the same filename would double-fire the channel push. Guard at the
+  // filename granularity (not msg_id — file may not be parseable yet).
+  if (inFlight.has(filename)) return { status: 'skipped' }
   const src = join(targets.inboxDir, filename)
   const sidecar = `${src}.seen`
   const archived = join(targets.readDir, filename)
@@ -109,9 +115,37 @@ export async function emitInboxMessage(
   if (ctx.fs.existsSync(archived)) return { status: 'skipped' }
   if (!ctx.fs.existsSync(src)) return { status: 'skipped' }
 
+  inFlight.add(filename)
+  try {
+    return await emitInboxMessageInner(
+      ctx,
+      targets,
+      wedgeState,
+      emittedDroppedAcks,
+      filename,
+      src,
+      sidecar,
+      askRegistry,
+    )
+  } finally {
+    inFlight.delete(filename)
+  }
+}
+
+async function emitInboxMessageInner(
+  ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env' | 'mcp'>,
+  targets: InboxTargets,
+  wedgeState: WedgeState,
+  emittedDroppedAcks: Set<string>,
+  filename: string,
+  src: string,
+  sidecar: string,
+  askRegistry?: AskRegistry,
+): Promise<EmitResult> {
   const data = await readInboxMessage(ctx, src)
   if (!data) return { status: 'skipped' }
   if (askRegistry) askRegistry.notifyIfWaiting(data)
+  void filename
   const msgId = String(data.id ?? '')
   const meta: Record<string, string> = {
     source: 'choros',
