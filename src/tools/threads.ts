@@ -67,7 +67,12 @@ export async function handleSendToThread(
   ctx: Pick<Context, 'fs' | 'clock' | 'proc' | 'env'>,
   targets: ThreadTargets,
   args: SendToThreadArgs,
-): Promise<{ msg_id: string; thread_id: string; fanned_out_to: string[] }> {
+): Promise<{
+  msg_id: string
+  thread_id: string
+  fanned_out_to: string[]
+  failures: string[]
+}> {
   const threadId = (args.thread_id ?? '').trim()
   const body = args.body ?? ''
   if (!threadId) throw new Error('send_to_thread: "thread_id" is required')
@@ -102,6 +107,7 @@ export async function handleSendToThread(
 
   const members = await listMembers(ctx, { stateRoot: targets.stateRoot }, threadId)
   const recipients: string[] = []
+  const failures: string[] = []
   for (const peerId of members) {
     if (peerId === targets.me) continue
     try {
@@ -109,14 +115,20 @@ export async function handleSendToThread(
     } catch {
       continue
     }
-    recipients.push(peerId)
-    const inboxDir = join(targets.stateRoot, peerId, 'inbox')
-    await ctx.fs.mkdir(inboxDir, { recursive: true })
-    await atomicWrite(
-      ctx,
-      join(inboxDir, `${id}.json`),
-      JSON.stringify({ ...msg, to_session: peerId }, null, 2),
-    )
+    try {
+      const inboxDir = join(targets.stateRoot, peerId, 'inbox')
+      await ctx.fs.mkdir(inboxDir, { recursive: true })
+      await atomicWrite(
+        ctx,
+        join(inboxDir, `${id}.json`),
+        JSON.stringify({ ...msg, to_session: peerId }, null, 2),
+      )
+      recipients.push(peerId)
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e)
+      ctx.proc.stderr(`[choros] send_to_thread fan-out to ${peerId.slice(0, 8)} failed: ${m}\n`)
+      failures.push(peerId)
+    }
   }
-  return { msg_id: id, thread_id: threadId, fanned_out_to: recipients }
+  return { msg_id: id, thread_id: threadId, fanned_out_to: recipients, failures }
 }

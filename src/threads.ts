@@ -106,6 +106,26 @@ export async function readThread(
   return msgs
 }
 
+// Per-thread mutation serialization. members.json is read-modify-write,
+// and even single-threaded JS sees concurrency at every await boundary —
+// two addMember calls for the same thread would each readMembers, then
+// each writeMembers, and the second write would clobber the first's
+// addition. Per-thread Promise chains serialize the read-write sequence.
+const threadMutationQueue = new Map<string, Promise<unknown>>()
+
+async function serializeOnThread<T>(rootId: string, op: () => Promise<T>): Promise<T> {
+  const prev = threadMutationQueue.get(rootId) ?? Promise.resolve()
+  const next = prev.then(op, op)
+  threadMutationQueue.set(rootId, next)
+  try {
+    return await next
+  } finally {
+    if (threadMutationQueue.get(rootId) === next) {
+      threadMutationQueue.delete(rootId)
+    }
+  }
+}
+
 async function readMembers(
   ctx: Pick<Context, 'fs'>,
   targets: ThreadTargets,
@@ -149,11 +169,13 @@ export async function addMember(
   rootId: string,
   peerId: string,
 ): Promise<string[]> {
-  await ensureThread(ctx, targets, rootId)
-  const set = await readMembers(ctx, targets, rootId)
-  set.add(peerId)
-  await writeMembers(ctx, targets, rootId, set)
-  return [...set].sort()
+  return serializeOnThread(rootId, async () => {
+    await ensureThread(ctx, targets, rootId)
+    const set = await readMembers(ctx, targets, rootId)
+    set.add(peerId)
+    await writeMembers(ctx, targets, rootId, set)
+    return [...set].sort()
+  })
 }
 
 export async function removeMember(
@@ -162,10 +184,12 @@ export async function removeMember(
   rootId: string,
   peerId: string,
 ): Promise<string[]> {
-  const set = await readMembers(ctx, targets, rootId)
-  set.delete(peerId)
-  await writeMembers(ctx, targets, rootId, set)
-  return [...set].sort()
+  return serializeOnThread(rootId, async () => {
+    const set = await readMembers(ctx, targets, rootId)
+    set.delete(peerId)
+    await writeMembers(ctx, targets, rootId, set)
+    return [...set].sort()
+  })
 }
 
 export interface ThreadSummary {

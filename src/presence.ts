@@ -194,15 +194,17 @@ export async function emitPresence(
     PUSH_TIMEOUT_MS,
     `presence ${filename}`,
   )
-  if (result === 'ok') {
-    try {
-      await ctx.fs.unlink(path)
-    } catch {
-      /* already gone */
-    }
-    return 'emitted'
+  // Always unlink — presence is fire-and-forget. On timeout we still drop
+  // the file so it doesn't accumulate forever waiting for a wedged CC to
+  // recover. A missed presence event is acceptable; an unbounded growing
+  // presence dir is not. (The hello/goodbye/rename will reappear next boot
+  // or rename respectively.)
+  try {
+    await ctx.fs.unlink(path)
+  } catch {
+    /* already gone */
   }
-  return 'timeout'
+  return result === 'ok' ? 'emitted' : 'timeout'
 }
 
 export type _ReferencedKnownInstance = KnownInstance

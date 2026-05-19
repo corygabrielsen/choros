@@ -182,7 +182,7 @@ describe('emitPresence (own presence dir consumer)', () => {
     expect(ctx.fs.existsSync(`${dir}/${filename}`)).toBe(false)
   })
 
-  test('leaves file on disk when push times out', async () => {
+  test('unlinks file even when push times out (presence is fire-and-forget)', async () => {
     const ctx = fakeContext()
     ctx.mcp.hangForever = true
     const dir = `${STATE}/${ME}/presence`
@@ -197,7 +197,9 @@ describe('emitPresence (own presence dir consumer)', () => {
       ctx.clock.advance(2000)
     }
     expect(await running).toBe('timeout')
-    expect(ctx.fs.existsSync(`${dir}/${filename}`)).toBe(true)
+    // File is dropped even on timeout — otherwise the dir grows forever
+    // under a wedged CC. A missed presence event is acceptable.
+    expect(ctx.fs.existsSync(`${dir}/${filename}`)).toBe(false)
   })
 
   test('skips non-presence filenames (.tmp, dotfiles)', async () => {

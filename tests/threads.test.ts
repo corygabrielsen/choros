@@ -72,6 +72,16 @@ describe('thread storage', () => {
     await removeMember(ctx, tt, 'root-1', PEER_A)
     expect(await listMembers(ctx, tt, 'root-1')).toEqual([PEER_B])
   })
+
+  test('concurrent addMember calls do not clobber each other', async () => {
+    const ctx = fakeContext()
+    // Fire many adds concurrently on the same thread — without per-thread
+    // serialization, the read-modify-write sequence would lose updates.
+    const ids = Array.from({ length: 10 }, (_, i) => `peer-${i}`)
+    await Promise.all(ids.map(p => addMember(ctx, tt, 'root-x', p)))
+    const members = await listMembers(ctx, tt, 'root-x')
+    expect(members.sort()).toEqual(ids.sort())
+  })
 })
 
 describe('handleJoinThread', () => {

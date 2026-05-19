@@ -63,6 +63,33 @@ for (const dir of [MY_INBOX, MY_READ, MY_SENT, MY_ACKS, MY_PRESENCE]) {
   await ctx.fs.mkdir(dir, { recursive: true })
 }
 
+// Refuse to start if another live bun holds this identity. Without this,
+// two buns for the same session race on heartbeat writes, inbox watching,
+// and presence broadcasts. We use the heartbeat pid (not a separate lock
+// file) so a clean exit naturally clears the claim.
+const LOCK_PATH = join(MY_ROOT, '.lock')
+async function takeLock(): Promise<void> {
+  let holder: { pid?: number; started?: string } | null = null
+  try {
+    holder = JSON.parse(await ctx.fs.readFile(LOCK_PATH))
+  } catch {
+    /* no lock yet */
+  }
+  if (holder && typeof holder.pid === 'number' && holder.pid !== ctx.proc.pid()) {
+    if (await ctx.proc.pidAlive(holder.pid)) {
+      ctx.proc.stderr(
+        `[choros] identity ${ME} already locked by pid ${holder.pid} (started ${holder.started ?? '?'}). Refusing to start a second bun for the same session.\n`,
+      )
+      ctx.proc.exit(1)
+    }
+  }
+  await ctx.fs.writeFile(
+    LOCK_PATH,
+    JSON.stringify({ pid: ctx.proc.pid(), started: new Date().toISOString() }),
+  )
+}
+await takeLock()
+
 const wedge: WedgeState = { consecutiveTimeouts: 0 }
 const droppedAcksEmitted = new Set<string>()
 const inFlightEmits = new Set<string>()
