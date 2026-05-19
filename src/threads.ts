@@ -47,8 +47,24 @@ function metaPath(stateRoot: string, rootId: string): string {
  * Per-thread count of msg files that failed to parse during the most
  * recent {@link readThread}. Surfaces silent corruption (otherwise
  * skipped silently) to monitors without throwing inside readThread.
+ *
+ * Bounded LRU — eviction order is insertion order (Map iterator
+ * guarantee); on overflow the oldest entry is dropped.
  */
 const lastCorruptParseCount = new Map<string, number>()
+const CORRUPT_PARSE_TRACKING_CAP = 1024
+
+function recordCorruptParseCount(rootId: string, corrupt: number): void {
+  if (lastCorruptParseCount.has(rootId)) {
+    lastCorruptParseCount.delete(rootId)
+  }
+  lastCorruptParseCount.set(rootId, corrupt)
+  while (lastCorruptParseCount.size > CORRUPT_PARSE_TRACKING_CAP) {
+    const oldest = lastCorruptParseCount.keys().next().value
+    if (oldest === undefined) break
+    lastCorruptParseCount.delete(oldest)
+  }
+}
 
 /** Return the number of msg-file parse failures observed in the last
  *  {@link readThread} for this thread. Zero when the read was clean. */
@@ -116,7 +132,7 @@ export async function readThread(
       corrupt++
     }
   }
-  lastCorruptParseCount.set(rootId, corrupt)
+  recordCorruptParseCount(rootId, corrupt)
   msgs.sort((a, b) => {
     if (a.ts && b.ts) return a.ts.localeCompare(b.ts)
     return a.id.localeCompare(b.id)
@@ -131,9 +147,26 @@ export async function readThread(
 // addition. Per-thread Promise chains serialize the read-write sequence.
 const threadMutationQueue = new Map<string, Promise<unknown>>()
 
+/** Per-op deadline for serialized thread mutations. A hung op would
+ *  otherwise wedge the chain permanently; with the deadline, a stuck
+ *  op rejects after N ms and subsequent queued ops proceed. */
+const THREAD_OP_TIMEOUT_MS = 30_000
+
 async function serializeOnThread<T>(rootId: string, op: () => Promise<T>): Promise<T> {
   const prev = threadMutationQueue.get(rootId) ?? Promise.resolve()
-  const next = prev.then(op, op)
+  const guardedOp = (): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`thread mutation timed out for ${rootId}`)),
+        THREAD_OP_TIMEOUT_MS,
+      )
+    })
+    return Promise.race([op(), timeout]).finally(() => {
+      if (timer) clearTimeout(timer)
+    })
+  }
+  const next = prev.then(guardedOp, guardedOp)
   threadMutationQueue.set(rootId, next)
   try {
     return await next

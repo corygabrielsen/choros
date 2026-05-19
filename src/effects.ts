@@ -253,6 +253,15 @@ function realSpawner(): Spawner {
   return {
     spawn(cmd, args): SpawnedChild {
       const child: ChildProcess = nodeSpawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      // Without an 'error' handler Node treats child spawn failure
+      // (ENOENT, EACCES) as an uncaught exception. Route it through
+      // the same onExit path so callers can detect spawn failure and
+      // attempt fallback or shutdown.
+      const exitListeners: Array<(code: number | null) => void> = []
+      child.on('error', err => {
+        process.stderr.write(`[choros] child spawn error (${cmd}): ${err.message ?? err}\n`)
+        for (const h of exitListeners) h(null)
+      })
       return {
         pid: child.pid,
         onStdout(handler) {
@@ -262,6 +271,7 @@ function realSpawner(): Spawner {
           child.stderr?.on('data', (chunk: Buffer) => handler(chunk.toString()))
         },
         onExit(handler) {
+          exitListeners.push(handler)
           child.on('exit', code => handler(code))
         },
         kill() {
