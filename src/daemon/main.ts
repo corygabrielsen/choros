@@ -149,11 +149,30 @@ process.stderr.write(
   `[choros-daemon] v${VERSION} listening on rpc=${SOCKET_PATH} admin=${ADMIN_SOCKET_PATH} db=${DB_PATH}\n`,
 )
 
+/** Overall shutdown hard deadline. If any phase wedges past this, the
+ *  process hard-exits with the lockfile and sockets still in place
+ *  rather than blocking forever — the next start's stale-pid check
+ *  will clean them up. */
+const SHUTDOWN_DEADLINE_MS = 5_000
+
 let shuttingDown = false
 async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) return
+  if (shuttingDown) {
+    // Second signal during a stuck shutdown — hard-exit. Otherwise the
+    // operator's reflex Ctrl-C / second SIGTERM is silently swallowed.
+    process.stderr.write(`[choros-daemon] ${signal} (second) — hard exit\n`)
+    process.exit(130)
+    return
+  }
   shuttingDown = true
   process.stderr.write(`[choros-daemon] ${signal} received, stopping\n`)
+  const hardExitTimer = setTimeout(() => {
+    process.stderr.write(
+      `[choros-daemon] shutdown wedged past ${SHUTDOWN_DEADLINE_MS}ms — hard exit\n`,
+    )
+    process.exit(1)
+  }, SHUTDOWN_DEADLINE_MS)
+  hardExitTimer.unref()
   // Stop accepting new connections first.
   await Promise.allSettled([rpc.stop(), admin.stop()])
   // Drain any in-flight handlers before closing the DB. 2s deadline
@@ -165,7 +184,12 @@ async function shutdown(signal: string): Promise<void> {
       new Promise<void>(resolve => setTimeout(resolve, 2_000)),
     ])
   }
-  storage.close()
+  try {
+    storage.close()
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    process.stderr.write(`[choros-daemon] storage.close threw: ${m}\n`)
+  }
   for (const p of [SOCKET_PATH, ADMIN_SOCKET_PATH, LOCK_PATH]) {
     try {
       unlinkSync(p)
@@ -173,6 +197,7 @@ async function shutdown(signal: string): Promise<void> {
       /* already gone */
     }
   }
+  clearTimeout(hardExitTimer)
   process.exit(0)
 }
 
@@ -181,3 +206,16 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     void shutdown(sig)
   })
 }
+
+// Convert unhandled JS errors into a clean shutdown rather than
+// leaking the lockfile + sockets. Crashing without unlinking would
+// strand the next daemon launch behind a stale-pid check.
+process.on('uncaughtException', err => {
+  process.stderr.write(`[choros-daemon] uncaughtException: ${err.stack ?? err.message}\n`)
+  void shutdown('uncaughtException')
+})
+process.on('unhandledRejection', reason => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+  process.stderr.write(`[choros-daemon] unhandledRejection: ${msg}\n`)
+  void shutdown('unhandledRejection')
+})

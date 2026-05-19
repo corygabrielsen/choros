@@ -136,7 +136,7 @@ export function resolveRecipient(
   const liveByName = ctx.storage.db
     .query(
       `SELECT id, display_name FROM sessions
-       WHERE display_name = ? AND lock_pid IS NOT NULL
+       WHERE display_name = ? COLLATE NOCASE AND lock_pid IS NOT NULL
        ORDER BY heartbeat_at DESC NULLS LAST LIMIT 2`,
     )
     .all(target) as { id: string; display_name: string | null }[]
@@ -150,7 +150,8 @@ export function resolveRecipient(
   const byName = ctx.storage.db
     .query(
       `SELECT id, display_name FROM sessions
-       WHERE display_name = ? ORDER BY heartbeat_at DESC NULLS LAST LIMIT 1`,
+       WHERE display_name = ? COLLATE NOCASE
+       ORDER BY heartbeat_at DESC NULLS LAST LIMIT 1`,
     )
     .get(target) as { id: string; display_name: string | null } | null
   if (byName) return byName

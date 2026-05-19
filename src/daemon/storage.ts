@@ -9,13 +9,14 @@ const SQL_DIR = `${HERE}/../sql`
 /** Current schema version the daemon binary expects. `applyMigrations`
  *  brings any older database up to this number. Bump when adding a new
  *  migration file `src/sql/NNN-*.sql`. */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /** Ordered migration files. Each is applied if and only if the current
  *  `system_meta.schema_version` is below the file's target version.
  *  Files are read at module load so the daemon binary embeds them. */
 const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: readFileSync(`${SQL_DIR}/000-init.sql`, 'utf8') },
+  { version: 2, sql: readFileSync(`${SQL_DIR}/001-display-name-index.sql`, 'utf8') },
 ]
 
 /** Opaque storage handle. Daemon code uses `db` directly for queries
@@ -36,6 +37,10 @@ export function openStorage(path: string): Storage {
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA synchronous = NORMAL')
   db.exec('PRAGMA wal_autocheckpoint = 1000')
+  // Block instead of throw on a transient writer lock contended by
+  // the admin HTTP read path. 5s comfortably covers any single-txn
+  // handler; longer than that is a wedge worth surfacing as an error.
+  db.exec('PRAGMA busy_timeout = 5000')
   // Foreign keys are NOT enforced: `messages.from_session` and
   // `messages.to_session` intentionally accept session ids that may
   // not yet exist in `sessions` (peers come and go). Declared

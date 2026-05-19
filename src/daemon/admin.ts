@@ -48,8 +48,12 @@ export function startAdminServer(opts: {
           // /peers on every render. Override via `?limit=N` (1..1000).
           const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '', 10)
           const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : 200
+          // Cap the offset symmetrically with the limit so
+          // `?offset=999999999` doesn't walk that many index rows on
+          // every poll. 1M is well past any plausible operator history.
           const rawOffset = Number.parseInt(url.searchParams.get('offset') ?? '', 10)
-          const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0
+          const offset =
+            Number.isFinite(rawOffset) && rawOffset > 0 ? Math.min(rawOffset, 1_000_000) : 0
           const rows = opts.storage.db
             .query(
               `SELECT ${cols} FROM sessions ORDER BY heartbeat_at DESC NULLS LAST LIMIT ? OFFSET ?`,

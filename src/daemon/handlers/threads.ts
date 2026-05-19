@@ -7,10 +7,20 @@ import {
   requireString,
 } from '#choros/daemon/helpers.ts'
 import { deliverOrBuffer } from '#choros/daemon/notify.ts'
-import { generateMessageId } from '#choros/identity.ts'
+import { generateMessageId, sanitizeId } from '#choros/identity.ts'
 import { enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
 import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
 import { NOTIFY_INBOUND_MESSAGE } from '#choros/protocol/notifications.ts'
+
+/** Helper: thread_id must follow the same shape rules as msg_id —
+ *  no path separators, control chars, or other lexical traps. */
+function requireThreadId(raw: string, label: string): string | RpcError {
+  try {
+    return sanitizeId(raw, `${label}.thread_id`)
+  } catch (e: unknown) {
+    return { code: ERR_INVALID_PARAMS, message: e instanceof Error ? e.message : String(e) }
+  }
+}
 
 export interface JoinThreadResult {
   thread_id: string
@@ -48,7 +58,9 @@ export function handleJoinThread(ctx: HandlerCtx, rawArgs: unknown): JoinThreadR
   if (isRpcError(obj)) return obj
   const session_id = requireString(obj, 'session_id', 'join_thread')
   if (isRpcError(session_id)) return session_id
-  const thread_id = requireString(obj, 'thread_id', 'join_thread')
+  const thread_id_raw = requireString(obj, 'thread_id', 'join_thread')
+  if (isRpcError(thread_id_raw)) return thread_id_raw
+  const thread_id = requireThreadId(thread_id_raw, 'join_thread')
   if (isRpcError(thread_id)) return thread_id
 
   ensureThread(ctx, thread_id)
@@ -100,7 +112,9 @@ export function handleLeaveThread(ctx: HandlerCtx, rawArgs: unknown): LeaveThrea
   if (isRpcError(obj)) return obj
   const session_id = requireString(obj, 'session_id', 'leave_thread')
   if (isRpcError(session_id)) return session_id
-  const thread_id = requireString(obj, 'thread_id', 'leave_thread')
+  const thread_id_raw = requireString(obj, 'thread_id', 'leave_thread')
+  if (isRpcError(thread_id_raw)) return thread_id_raw
+  const thread_id = requireThreadId(thread_id_raw, 'leave_thread')
   if (isRpcError(thread_id)) return thread_id
 
   ctx.storage.db
@@ -169,7 +183,9 @@ export function handleSendToThread(
   if (isRpcError(obj)) return obj
   const session_id = requireString(obj, 'session_id', 'send_to_thread')
   if (isRpcError(session_id)) return session_id
-  const thread_id = requireString(obj, 'thread_id', 'send_to_thread')
+  const thread_id_raw = requireString(obj, 'thread_id', 'send_to_thread')
+  if (isRpcError(thread_id_raw)) return thread_id_raw
+  const thread_id = requireThreadId(thread_id_raw, 'send_to_thread')
   if (isRpcError(thread_id)) return thread_id
   const body = requireString(obj, 'body', 'send_to_thread')
   if (isRpcError(body)) return body
