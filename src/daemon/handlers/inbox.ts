@@ -53,10 +53,14 @@ export function handleInbox(ctx: HandlerCtx, rawArgs: unknown): InboxResult | Rp
       ? INBOX_DEFAULT_LIMIT
       : Math.min(Math.max(1, Math.trunc(limitArg)), INBOX_MAX_LIMIT)
 
-  // Fetch one extra row to detect row-limit truncation without a
-  // second COUNT query. Stable order: ts then id (ts is TEXT and id is
-  // non-monotonic, so ts alone leaves equal-ts rows in arbitrary order
-  // — unstable paging).
+  // Fetch one extra row to detect row-limit truncation without a COUNT.
+  // Uses .all() (not .iterate()): Bun's lazy iterator leaves the
+  // memoized prepared statement busy when the byte-budget loop breaks
+  // early, breaking the next call. The over-materialization that .all()
+  // implies (decoding rows the byte budget then discards) only bites at
+  // limit:500 with large bodies — out of scope at current scale.
+  // Stable order: ts then id (ts is TEXT and id non-monotonic, so ts
+  // alone leaves equal-ts rows in arbitrary order — unstable paging).
   const rows = ctx.storage.db
     .query(
       `SELECT m.id AS msg_id, m.from_session, s.display_name AS from_name,
@@ -74,8 +78,8 @@ export function handleInbox(ctx: HandlerCtx, rawArgs: unknown): InboxResult | Rp
 
   // Enforce the byte budget so the response frame stays under
   // MAX_FRAME_BYTES. Always include at least one message (a single
-  // 64 KiB body is well under budget) so a large head-of-queue
-  // message can still be drained one at a time.
+  // 64 KiB body is well under budget) so a large head-of-queue message
+  // can still be drained one at a time.
   const messages: InboxMessage[] = []
   let bytes = 0
   for (const m of capped) {

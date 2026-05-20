@@ -9,7 +9,7 @@ const SQL_DIR = `${HERE}/../sql`
 /** Current schema version the daemon binary expects. `applyMigrations`
  *  brings any older database up to this number. Bump when adding a new
  *  migration file `src/sql/NNN-*.sql`. */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 /** Ordered migration files. Each is applied if and only if the current
  *  `system_meta.schema_version` is below the file's target version.
@@ -19,6 +19,7 @@ const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 2, sql: readFileSync(`${SQL_DIR}/001-display-name-index.sql`, 'utf8') },
   { version: 3, sql: readFileSync(`${SQL_DIR}/002-hot-path-indexes.sql`, 'utf8') },
   { version: 4, sql: readFileSync(`${SQL_DIR}/003-narrower-indexes.sql`, 'utf8') },
+  { version: 5, sql: readFileSync(`${SQL_DIR}/004-inbox-order-index.sql`, 'utf8') },
 ]
 
 /** Opaque storage handle. Daemon code uses `db` directly for queries
