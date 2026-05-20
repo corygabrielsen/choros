@@ -27,15 +27,27 @@ export class SessionRouter {
    *  send/broadcast/publish. */
   private displayName = new Map<string, string | null>()
 
-  /** Bind a session to a sink. If the session was already bound to a
-   *  different sink (shim reconnect during a network blip, or two
-   *  shims racing with the same session_id), the prior sink's reverse
-   *  entry is cleared so that when the OS later delivers its `close`
-   *  event we don't tear down the *new* binding via `unbindBySink`. */
+  /** Bind a session to a sink. Two stale-entry hazards to clear:
+   *
+   *  1. The session was bound to a *different* sink (shim reconnect, or
+   *     two shims racing the same session_id): drop the prior sink's
+   *     reverse entry so its later `close` event doesn't tear down this
+   *     fresh binding via `unbindBySink`.
+   *
+   *  2. This sink was bound to a *different* session (identity rotation
+   *     on one connection — register-as-A then register-as-B): drop the
+   *     prior session's forward entry, else `bySession` keeps a dangling
+   *     `A→sink` and notifications addressed to A get delivered to B's
+   *     connection (cross-session leak). Symmetric to unbindBySink. */
   bind(sessionId: string, sink: NotificationSink, displayName: string | null): void {
-    const prior = this.bySession.get(sessionId)
-    if (prior && prior !== sink) {
-      this.sessionBySink.delete(prior)
+    const priorSink = this.bySession.get(sessionId)
+    if (priorSink && priorSink !== sink) {
+      this.sessionBySink.delete(priorSink)
+    }
+    const priorSession = this.sessionBySink.get(sink)
+    if (priorSession !== undefined && priorSession !== sessionId) {
+      this.bySession.delete(priorSession)
+      this.displayName.delete(priorSession)
     }
     this.bySession.set(sessionId, sink)
     this.sessionBySink.set(sink, sessionId)
