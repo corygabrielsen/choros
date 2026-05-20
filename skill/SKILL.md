@@ -7,7 +7,7 @@ description: Inter-session messaging and swarm coordination between Claude Code 
 
 Two layers, one daemon:
 
-- **MCP shim** (one per CC session): the typed tool surface. Every call (`mcp__choros__send`, etc.) forwards to the daemon over a Unix-socket JSON-RPC. Inbound messages arrive as `<channel source="choros" from="…" msg_id="…" …>` events the moment they land — no polling. Delivery acks arrive as `<channel source="choros-ack" msg_id="…" status="delivered" …>`; reaction + read-receipt events arrive on their own `source=` channels.
+- **MCP shim** (one per CC session): the typed tool surface. Every call (`mcp__choros__send`, etc.) forwards to the daemon over a Unix-socket JSON-RPC. Inbound messages arrive as `<channel source="choros" from="…" msg_id="…" …>` events the moment they land — no polling. Delivery acks arrive as `<channel source="choros-ack" msg_id="…" status="delivered|dropped" …>` (`delivered` = transcript-verified, `dropped` = never surfaced); reaction + read-receipt events arrive on their own `source=` channels. Push requires launching the session with the channel dev flag — see [Enabling the channel](#enabling-the-channel-required-for-push).
 - **choros daemon** (one per machine): the long-lived process backing every shim. Owns the SQLite database at `~/.local/state/choros/choros.sqlite` (WAL). All state — sessions, messages, subscriptions, threads, reactions, buffered notifications — lives there. Managed by `systemd --user` (Linux) or `launchd` (macOS); install via `install/install.sh`. Also exposes an HTTP admin socket (`~/.local/state/choros/admin.sock`) for `curl --unix-socket` introspection (`/peers`, `/stats`, `/health`).
 
 The daemon socket + database survive CC restarts. The shim reconnects with backoff on daemon bounce — and tolerates the daemon being down at launch — so the MCP server stays up either way. Notifications buffered while a session was offline drain on its next `choros.register` handshake.
@@ -135,16 +135,28 @@ No tool call — these arrive automatically:
 - **@-mentions are not implemented.** The schema reserves a column; no resolution runs yet. Don't tell users `@name` in a body does anything special.
 - **No sync `ask`.** Agent-as-tool blocking ask is not in v1.0. Use `send` with `act: "QUESTION"` and let the `ANSWER` arrive as a normal inbound event.
 
+## Enabling the channel (required for push)
+
+Push delivery rides Claude Code's **channel** mechanism: the shim declares the `claude/channel` capability and emits `notifications/claude/channel`. During the research preview, custom channels are off the allowlist, so **each CC session must launch with the development flag** or it receives nothing (the daemon, tools, and `inbox` pull still work; only push is dark):
+
+```
+claude --dangerously-load-development-channels server:choros
+```
+
+Without it, sends are stored and `inbox`-retrievable but never surface as `<channel>` events — and the recipient is reported `wedged` (see below), not silently "delivered."
+
 ## Reliability model
 
-Push is best-effort. The MCP stdio link between a CC session and its shim can wedge silently — `mcp.notification()` can resolve while CC drops the message internally. Compensations:
+Push is best-effort, but **delivery is verified, not assumed**. `mcp.notification()` resolving means "bytes written to the transport," not "CC surfaced it" — so the shim confirms a message only after its msg_id actually appears in the recipient's own CC transcript. Compensations:
 
-1. **`live_status` + `heartbeat_age_ms` on `send`.** Honest sender expectation: `live` = pushed eagerly; `stale`/`unknown` = may not have landed.
-2. **`choros-ack` events.** When the recipient's shim confirms CC recorded the message, the sender's agent gets a delivery ack — no polling.
-3. **Buffered drain on reconnect.** Notifications enqueued while a session was offline replay (in order) on its next `register`.
-4. **`doctor`.** The roster + classification surface for diagnosing silence.
+1. **`live_status` + `heartbeat_age_ms` on `send`.** Honest sender expectation: `live` = pushed eagerly; `stale`/`wedged`/`unknown` = may not have landed.
+2. **`choros-ack` events carry a status.** `status="delivered"` fires only when the recipient's transcript proves the channel event surfaced. `status="dropped"` fires when the push resolved (or timed out) but never surfaced — the message did NOT land. The ack never claims more than the transcript proves.
+3. **Wedge on repeated drops.** Consecutive verified drops mark the recipient `wedged` (visible in `doctor`/`send`); a later verified delivery clears it. A wedged peer almost always means its session wasn't launched with the channel dev flag.
+4. **Buffered drain on reconnect.** Notifications enqueued while a session was offline replay (in order) on its next `register`.
+5. **`inbox` pull.** The authoritative recovery path — works with no channel/flag at all. After a `dropped` ack, the recipient can still `inbox` the message.
+6. **`doctor`.** The roster + classification surface for diagnosing silence.
 
-A `wedged` peer's push channel is dropping; it won't see messages until its CC restarts. A `dead` peer's shim is likely gone.
+A `wedged` peer's push channel is dropping (most often: missing dev flag, or CC needs a restart). A `dead` peer's shim is likely gone.
 
 ## Diagnosing before claiming
 
@@ -154,7 +166,8 @@ When something looks broken, the failure space has ≥2 hypotheses. Probe, don't
 |---|---|---|
 | Peer absent from `doctor` | "peer not registered" | Their shim registers automatically once the MCP loads — confirm the choros MCP is loaded in that session |
 | `send` ok but no reply | "they're ignoring me" | Check the returned `live_status`. `wedged`/`stale` ⟹ push may not have landed. If `act` was ANNOUNCE, no reply was expected |
-| Peer `wedged` in `doctor` | "unreachable" | Push is dropping; the peer must restart CC to clear it |
+| Peer `wedged` in `doctor` | "unreachable" | Verified pushes are dropping. Almost always: that session wasn't launched with `--dangerously-load-development-channels server:choros`. Relaunch it with the flag (or restart CC); meanwhile it can still `inbox` |
+| `choros-ack` with `status="dropped"` | "send failed, retry" | The message is stored — it just didn't surface as a channel event (recipient missing the dev flag). Don't blind-retry; the recipient can `inbox` it, or relaunch with the flag |
 | No `choros-ack` arrived | "delivery failed" | Check `live_status` first; a `stale`/`dead` recipient never confirmed. Don't blind-retry |
 | `doctor` errors / MCP shows failed | "choros is broken" | Check the daemon: `systemctl --user status choros` (Linux) / `launchctl print gui/$UID/com.choros.daemon` (macOS); `curl --unix-socket ~/.local/state/choros/admin.sock http://localhost/health` |
 
