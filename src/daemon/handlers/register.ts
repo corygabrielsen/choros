@@ -1,4 +1,6 @@
-import { DISPLAY_NAME_MAX_BYTES } from '#choros/daemon/helpers.ts'
+import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
+import { DISPLAY_NAME_MAX_BYTES, nowMsFromCtx } from '#choros/daemon/helpers.ts'
+import { broadcastPresence } from '#choros/daemon/notify.ts'
 import type { NotificationSink, SessionRouter } from '#choros/daemon/sessions.ts'
 import type { Storage } from '#choros/daemon/storage.ts'
 import { drainPendingNotifications, upsertSession } from '#choros/daemon/storage.ts'
@@ -86,9 +88,27 @@ export function handleRegister(
   })
   ctx.router.bind(parsed.session_id, sink, parsed.display_name)
   const pending = drainPendingNotifications(ctx.storage, parsed.session_id)
+
+  // Roster: other registered sessions with a fresh heartbeat. Returned
+  // so the freshly-connected shim can show "who's online" without a
+  // follow-up doctor call.
+  const liveCutoff = new Date(nowMsFromCtx(ctx) - LIVE_MAX_AGE_MS).toISOString()
+  const roster = ctx.storage.db
+    .query(
+      `SELECT id AS session_id, display_name FROM sessions
+       WHERE id != ? AND lock_pid IS NOT NULL AND heartbeat_at >= ?
+       ORDER BY heartbeat_at DESC NULLS LAST`,
+    )
+    .all(parsed.session_id, liveCutoff) as RegisterResult['roster']
+
+  // Tell the live peers this session arrived (push-only, post-bind so
+  // the joiner itself is excluded by connectedSessionIds).
+  broadcastPresence(ctx, 'join', parsed.session_id, parsed.display_name)
+
   return {
     daemon_version: ctx.daemon.version,
     protocol_version: PROTOCOL_VERSION,
     pending,
+    roster,
   }
 }

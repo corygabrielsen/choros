@@ -73,6 +73,11 @@ export interface RegisterArgs {
   pid: number
 }
 
+export interface RosterEntry {
+  session_id: string
+  display_name: string | null
+}
+
 export interface RegisterResult {
   daemon_version: string
   protocol_version: number
@@ -80,6 +85,10 @@ export interface RegisterResult {
    *  drained on this register call. The shim should re-emit each via
    *  mcp.notification to its CC before processing live traffic. */
   pending: { method: string; params: unknown }[]
+  /** Live peers (other registered sessions with a fresh heartbeat) at
+   *  the moment of this register. Lets a freshly-connected shim show
+   *  "who's online" without a follow-up doctor call. */
+  roster: RosterEntry[]
 }
 
 /* --- choros.deregister -------------------------------------------------- */

@@ -1,4 +1,5 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
+import { broadcastPresence } from '#choros/daemon/notify.ts'
 import { clearSessionLock } from '#choros/daemon/storage.ts'
 import {
   type DeregisterArgs,
@@ -23,6 +24,11 @@ function validateDeregisterArgs(args: unknown): RpcError | DeregisterArgs {
 export function handleDeregister(ctx: HandlerCtx, rawArgs: unknown): DeregisterResult | RpcError {
   const parsed = validateDeregisterArgs(rawArgs)
   if ('code' in parsed) return parsed
+  // Announce the departure to live peers BEFORE unbinding (the leaving
+  // session is excluded from the fan-out by id either way; doing it
+  // first keeps its display_name available from the cache).
+  const displayName = ctx.router.displayNameFor(parsed.session_id) ?? null
+  broadcastPresence(ctx, 'leave', parsed.session_id, displayName)
   clearSessionLock(ctx.storage, parsed.session_id)
   ctx.router.unbindBySession(parsed.session_id)
   return { acknowledged: true }

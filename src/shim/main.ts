@@ -28,6 +28,7 @@ import {
   PROTOCOL_VERSION,
   type RegisterResult,
 } from '#choros/protocol/methods.ts'
+import { NOTIFY_ROSTER } from '#choros/protocol/notifications.ts'
 import { resolveDisplayName } from '#choros/shim/display-name.ts'
 import { connectRpcClient, type RpcClient } from '#choros/shim/rpc-client.ts'
 import { daemonSocketPath, projectsRoot } from '#choros/state-root.ts'
@@ -180,8 +181,20 @@ async function registerWithDaemon(client: RpcClient): Promise<void> {
   for (const buffered of result.pending) {
     await emitDaemonNotification(buffered.method, buffered.params)
   }
+  // Surface "who's online" once on (re)connect. `roster` is guarded
+  // (?? []) so a new shim against an older daemon that doesn't return
+  // it degrades cleanly to no roster event.
+  const roster = result.roster ?? []
+  if (roster.length > 0) {
+    const names = roster.map(p => p.display_name ?? p.session_id.slice(0, 8)).join(', ')
+    await emitDaemonNotification(NOTIFY_ROSTER, {
+      event: 'roster',
+      count: roster.length,
+      body: `${roster.length} online: ${names}`,
+    })
+  }
   ctx.proc.stderr(
-    `[choros-shim] v${SHIM_VERSION} registered with daemon (proto=${result.protocol_version}, daemon=${result.daemon_version}), drained ${result.pending.length} pending\n`,
+    `[choros-shim] v${SHIM_VERSION} registered (proto=${result.protocol_version}, daemon=${result.daemon_version}); drained ${result.pending.length} pending, ${roster.length} peers online\n`,
   )
 }
 

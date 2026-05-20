@@ -112,6 +112,15 @@ Topics are free-form (`deploy-room`, `ci-failures`) and **case-folded** (`FOO` a
 
 `mcp__choros__react msg_id:"…" emoji:"…"`. Two fields. Only a recipient of the message may react to it; the daemon routes the `<channel source="choros-reaction">` event to the original sender. Use for ack / thumbs-up that doesn't deserve a full reply.
 
+## Presence
+
+No tool call — these arrive automatically:
+
+- **Roster on connect.** When your shim registers (session start or reconnect), it surfaces a one-time `<channel source="choros-roster">` event whose body is `"N online: <names>"` — the live peers at that moment. So a fresh session opens already knowing who's around, without running `doctor`.
+- **Join/leave events.** When any session registers or cleanly deregisters, every *currently-connected* peer gets a `<channel source="choros-presence" event="join|leave" session_id … display_name …>` event. Push-only and ephemeral — a peer that was offline does **not** get a backlog of presence events on reconnect (it gets the fresh roster instead). A session that crashes (no clean deregister) produces no `leave`; its absence shows up as a stale `doctor` classification.
+
+`doctor` remains the on-demand point-in-time roster; presence is the push layer on top.
+
 ## Threading
 
 1. **Implicit** via `in_reply_to: <msg_id>` on any send/publish/send_to_thread — receivers walk the chain.

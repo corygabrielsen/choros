@@ -625,3 +625,62 @@ describe('authz + error-contract regressions (post bug-r5/r6 saturation)', () =>
     }
   })
 })
+
+describe('presence + roster', () => {
+  test('register returns the live roster', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      await registerClient(daemon, PEER_A, 'alice')
+      const bob = await connectTestClient(daemon.socketPath)
+      const res = await bob.call<{
+        roster: { session_id: string; display_name: string | null }[]
+      }>('choros.register', {
+        protocol_version: PROTOCOL_VERSION,
+        session_id: PEER_B,
+        display_name: 'bob',
+        host: 'test',
+        cwd: '/tmp',
+        pid: 1,
+      })
+      const alice = res.roster.find(r => r.session_id === PEER_A)
+      expect(alice?.display_name).toBe('alice')
+      expect(res.roster.some(r => r.session_id === PEER_B)).toBe(false) // never self
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('a joining session pushes a join presence to live peers', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const presence = alice.nextNotification('choros.presence')
+      await registerClient(daemon, PEER_B, 'bob')
+      const ev = (await presence) as { event: string; session_id: string; display_name: string }
+      expect(ev.event).toBe('join')
+      expect(ev.session_id).toBe(PEER_B)
+      expect(ev.display_name).toBe('bob')
+      await alice.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('a leaving session pushes a leave presence', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      const presence = alice.nextNotification('choros.presence')
+      await bob.call('choros.deregister', { session_id: PEER_B })
+      const ev = (await presence) as { event: string; session_id: string }
+      expect(ev.event).toBe('leave')
+      expect(ev.session_id).toBe(PEER_B)
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+})

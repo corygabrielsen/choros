@@ -1,5 +1,6 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { enqueuePendingNotification } from '#choros/daemon/storage.ts'
+import { NOTIFY_PRESENCE } from '#choros/protocol/notifications.ts'
 
 /** Schedule a notification for delivery to `sessionId`'s shim. If the
  *  shim is currently connected, the notification is written
@@ -39,5 +40,36 @@ export function deliverOrBuffer(
     process.stderr.write(
       `[choros-daemon] deliverOrBuffer dropped notification to ${sessionId} (${method}): ${m}\n`,
     )
+  }
+}
+
+/** Fan out a join/leave presence event to every currently-connected
+ *  peer (excluding the subject). Push-only — presence is ephemeral, so
+ *  unlike deliverOrBuffer it does NOT enqueue for offline sessions (a
+ *  "joined" replayed minutes later on reconnect is noise). */
+export function broadcastPresence(
+  ctx: HandlerCtx,
+  event: 'join' | 'leave',
+  sessionId: string,
+  displayName: string | null,
+): void {
+  const ts = ctx.nowIso()
+  const who = displayName ?? sessionId.slice(0, 8)
+  const body = `${who} ${event === 'join' ? 'joined' : 'left'}`
+  for (const peerId of ctx.router.connectedSessionIds()) {
+    if (peerId === sessionId) continue
+    const sink = ctx.router.sinkFor(peerId)
+    if (!sink) continue
+    try {
+      sink.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: NOTIFY_PRESENCE,
+          params: { event, session_id: sessionId, display_name: displayName, body, ts },
+        }),
+      )
+    } catch {
+      /* a dead peer sink is harmless here — presence is best-effort */
+    }
   }
 }
