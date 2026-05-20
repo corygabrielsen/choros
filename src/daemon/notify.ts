@@ -43,31 +43,38 @@ export function deliverOrBuffer(
   }
 }
 
-/** Fan out a join/leave presence event to every currently-connected
+/** Fan out a join/leave/rename presence event to every currently-connected
  *  peer (excluding the subject). Push-only — presence is ephemeral, so
  *  unlike deliverOrBuffer it does NOT enqueue for offline sessions (a
- *  "joined" replayed minutes later on reconnect is noise). */
+ *  "joined" replayed minutes later on reconnect is noise). For `rename`,
+ *  pass the prior name as `oldName` so peers can correlate the identity. */
 export function broadcastPresence(
   ctx: HandlerCtx,
-  event: 'join' | 'leave',
+  event: 'join' | 'leave' | 'rename',
   sessionId: string,
   displayName: string | null,
+  oldName?: string | null,
 ): void {
   const ts = ctx.nowIso()
   const who = displayName ?? sessionId.slice(0, 8)
-  const body = `${who} ${event === 'join' ? 'joined' : 'left'}`
+  const body =
+    event === 'rename'
+      ? `${oldName ?? sessionId.slice(0, 8)} renamed to ${who}`
+      : `${who} ${event === 'join' ? 'joined' : 'left'}`
+  const params: Record<string, unknown> = {
+    event,
+    session_id: sessionId,
+    display_name: displayName,
+    body,
+    ts,
+  }
+  if (event === 'rename') params.old_name = oldName ?? null
   for (const peerId of ctx.router.connectedSessionIds()) {
     if (peerId === sessionId) continue
     const sink = ctx.router.sinkFor(peerId)
     if (!sink) continue
     try {
-      sink.write(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          method: NOTIFY_PRESENCE,
-          params: { event, session_id: sessionId, display_name: displayName, body, ts },
-        }),
-      )
+      sink.write(JSON.stringify({ jsonrpc: '2.0', method: NOTIFY_PRESENCE, params }))
     } catch {
       /* a dead peer sink is harmless here — presence is best-effort */
     }

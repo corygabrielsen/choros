@@ -117,7 +117,7 @@ Topics are free-form (`deploy-room`, `ci-failures`) and **case-folded** (`FOO` a
 No tool call — these arrive automatically:
 
 - **Roster on connect.** When your shim registers (session start or reconnect), it surfaces a one-time `<channel source="choros" kind="choros-roster">` event whose body is `"N online: <names>"` — the live peers at that moment. So a fresh session opens already knowing who's around, without running `doctor`.
-- **Join/leave events.** When any session registers or cleanly deregisters, every *currently-connected* peer gets a `<channel source="choros" kind="choros-presence" event="join|leave" session_id … display_name …>` event. Push-only and ephemeral — a peer that was offline does **not** get a backlog of presence events on reconnect (it gets the fresh roster instead). A session that crashes (no clean deregister) produces no `leave`; its absence shows up as a stale `doctor` classification.
+- **Join/leave/rename events.** When any session registers, cleanly deregisters, or changes its display name, every *currently-connected* peer gets a `<channel source="choros" kind="choros-presence" event="join|leave|rename" session_id … display_name …>` event (a `rename` also carries `old_name`). Push-only and ephemeral — a peer that was offline does **not** get a backlog of presence events on reconnect (it gets the fresh roster instead). A session that crashes (no clean deregister) produces no `leave`; its absence shows up as a stale `doctor` classification. A `rename` fires when the shim detects a new title on its next heartbeat (≤30 s after `/rename`), not instantly.
 
 `doctor` remains the on-demand point-in-time roster; presence is the push layer on top.
 

@@ -6,6 +6,7 @@ import {
   optionalString,
   requireString,
 } from '#choros/daemon/helpers.ts'
+import { broadcastPresence } from '#choros/daemon/notify.ts'
 import { ERR_UNKNOWN_SESSION, type RpcError } from '#choros/protocol/methods.ts'
 
 export interface SetDisplayNameResult {
@@ -31,6 +32,10 @@ export function handleSetDisplayName(
   const value: string | null =
     display_name === undefined || display_name.length === 0 ? null : display_name
 
+  // Prior name (cached) so a real change can be announced to live peers.
+  const cached = ctx.router.displayNameFor(session_id)
+  const previous = cached === undefined ? null : cached
+
   const result = ctx.storage.db
     .query('UPDATE sessions SET display_name = ? WHERE id = ?')
     .run(value, session_id)
@@ -41,5 +46,12 @@ export function handleSetDisplayName(
     return { code: ERR_UNKNOWN_SESSION, message: 'set_display_name: unknown session' }
   }
   ctx.router.setDisplayName(session_id, value)
+
+  // Announce the rename so live peers update without waiting for a doctor,
+  // the renamer's next message, or a leave/join cycle. Push-only; skip
+  // no-op writes that didn't actually change the name.
+  if (previous !== value) {
+    broadcastPresence(ctx, 'rename', session_id, value, previous)
+  }
   return { display_name: value }
 }

@@ -118,6 +118,37 @@ describe('daemon handlers (Phase 2)', () => {
     }
   })
 
+  test('set_display_name broadcasts a rename presence event to live peers', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      // Arm before bob registers so bob's join is consumed deterministically
+      // (notifications aren't buffered — an unwaited one is dropped), then
+      // the rename can't be confused with the join.
+      const joinSeen = alice.nextNotification('choros.presence')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      await joinSeen
+
+      const renameSeen = alice.nextNotification('choros.presence')
+      await bob.call('choros.set_display_name', { session_id: PEER_B, display_name: 'bob-renamed' })
+      const evt = (await renameSeen) as {
+        event: string
+        session_id: string
+        display_name: string
+        old_name: string | null
+      }
+      expect(evt.event).toBe('rename')
+      expect(evt.session_id).toBe(PEER_B)
+      expect(evt.display_name).toBe('bob-renamed')
+      expect(evt.old_name).toBe('bob')
+
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
   test('send-to-self is rejected', async () => {
     const daemon = spawnTestDaemon()
     try {
