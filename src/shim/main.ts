@@ -29,7 +29,7 @@ import {
   type RegisterResult,
 } from '#choros/protocol/methods.ts'
 import { resolveDisplayName } from '#choros/shim/display-name.ts'
-import { connectRpcClient } from '#choros/shim/rpc-client.ts'
+import { connectRpcClient, type RpcClient } from '#choros/shim/rpc-client.ts'
 import { daemonSocketPath, projectsRoot } from '#choros/state-root.ts'
 
 const SHIM_VERSION = '1.0.0'
@@ -128,6 +128,30 @@ async function emitDaemonNotification(method: string, params: unknown): Promise<
   }
 }
 
+/** Register (or re-register) this session with the daemon over an open
+ *  connection: drains any buffered notifications and refreshes the
+ *  cached display name. Called from onConnect on every (re)connect AND
+ *  from the heartbeat handler when the daemon reports the session
+ *  unknown — re-registering in place rather than exiting the process.
+ *  Throws on protocol mismatch (unrecoverable). */
+async function registerWithDaemon(client: RpcClient): Promise<void> {
+  cachedDisplayName = await currentDisplayName()
+  const result = await client.call<RegisterResult>('choros.register', {
+    protocol_version: PROTOCOL_VERSION,
+    session_id: ME,
+    display_name: cachedDisplayName,
+    host: ctx.env.hostname(),
+    cwd: ctx.proc.cwd(),
+    pid: ctx.proc.pid(),
+  })
+  for (const buffered of result.pending) {
+    await emitDaemonNotification(buffered.method, buffered.params)
+  }
+  ctx.proc.stderr(
+    `[choros-shim] v${SHIM_VERSION} registered with daemon (proto=${result.protocol_version}, daemon=${result.daemon_version}), drained ${result.pending.length} pending\n`,
+  )
+}
+
 const rpc = await connectRpcClient({
   socketPath: DAEMON_SOCK,
   onNotification: (method, params) => {
@@ -135,22 +159,7 @@ const rpc = await connectRpcClient({
   },
   onConnect: async (client): Promise<void> => {
     try {
-      cachedDisplayName = await currentDisplayName()
-      const result = await client.call<RegisterResult>('choros.register', {
-        protocol_version: PROTOCOL_VERSION,
-        session_id: ME,
-        display_name: cachedDisplayName,
-        host: ctx.env.hostname(),
-        cwd: ctx.proc.cwd(),
-        pid: ctx.proc.pid(),
-      })
-      // Re-emit any buffered notifications drained on registration.
-      for (const buffered of result.pending) {
-        await emitDaemonNotification(buffered.method, buffered.params)
-      }
-      ctx.proc.stderr(
-        `[choros-shim] v${SHIM_VERSION} registered with daemon (proto=${result.protocol_version}, daemon=${result.daemon_version}), drained ${result.pending.length} pending\n`,
-      )
+      await registerWithDaemon(client)
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e)
       const code = (e as { code?: number })?.code
@@ -237,40 +246,50 @@ server.setRequestHandler(CallToolRequestSchema, async req => {
 
 await server.connect(new StdioServerTransport())
 
-// Periodic heartbeat + /rename detection. ERR_UNKNOWN_SESSION means
-// the daemon dropped our session row (e.g. cleared by an admin /
-// migration) — force a re-register by exiting; systemd / launchd
-// will re-spawn the shim if managed.
-const heartbeatInterval = setInterval(() => {
-  void (async (): Promise<void> => {
-    try {
-      await rpc.call('choros.heartbeat', { session_id: ME, pid: ctx.proc.pid() })
-      // Check for /rename — cheap when the JSONL hasn't grown.
-      const name = await currentDisplayName()
-      if (name !== cachedDisplayName) {
-        cachedDisplayName = name
-        try {
-          await rpc.call('choros.set_display_name', { session_id: ME, display_name: name })
-        } catch (e: unknown) {
-          const m = e instanceof Error ? e.message : String(e)
-          ctx.proc.stderr(`[choros-shim] set_display_name failed: ${m}\n`)
-        }
+/** Push a /rename to the daemon if the JSONL display name changed. */
+async function syncDisplayName(): Promise<void> {
+  const name = await currentDisplayName()
+  if (name === cachedDisplayName) return
+  cachedDisplayName = name
+  try {
+    await rpc.call('choros.set_display_name', { session_id: ME, display_name: name })
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    ctx.proc.stderr(`[choros-shim] set_display_name failed: ${m}\n`)
+  }
+}
+
+/** One heartbeat tick: heartbeat + rename detection, with in-place
+ *  re-register if the daemon reports the session unknown (post-
+ *  reconnect window or a genuine drop). Never exits — a dropped
+ *  heartbeat is transient and the reconnect loop handles disconnects. */
+async function heartbeatTick(): Promise<void> {
+  try {
+    await rpc.call('choros.heartbeat', { session_id: ME, pid: ctx.proc.pid() })
+    await syncDisplayName()
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const code = (err as { code?: number })?.code
+    if (code === ERR_UNKNOWN_SESSION || msg.includes('not registered')) {
+      // The daemon doesn't know this session — either a genuine drop
+      // (admin cleared the row) or the brief window after a reconnect
+      // before register lands (the auth boundary reports "not
+      // registered" until the binding exists). Re-register in place;
+      // do NOT exit — exiting kills the MCP server for the whole CC
+      // session.
+      ctx.proc.stderr('[choros-shim] heartbeat: session unknown — re-registering\n')
+      try {
+        await registerWithDaemon(rpc)
+      } catch (e: unknown) {
+        const rm = e instanceof Error ? e.message : String(e)
+        ctx.proc.stderr(`[choros-shim] re-register failed: ${rm}\n`)
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      const code = (err as { code?: number })?.code
-      if (code === ERR_UNKNOWN_SESSION || msg.includes('not registered')) {
-        ctx.proc.stderr('[choros-shim] heartbeat: session unknown — forcing reconnect\n')
-        // Route through shutdown() rather than a bare rpc.close + exit
-        // so the heartbeat interval is cleared, the deregister timeout
-        // races correctly, and we don't leak an interval that keeps
-        // firing against a closed client until the process exits.
-        void shutdown('heartbeat-unknown-session').finally(() => ctx.proc.exit(1))
-      }
-      /* transient disconnect: reconnect loop will re-register */
     }
-  })()
-}, HEARTBEAT_INTERVAL_MS)
+    /* else transient disconnect: the reconnect loop re-registers */
+  }
+}
+
+const heartbeatInterval = setInterval(() => void heartbeatTick(), HEARTBEAT_INTERVAL_MS)
 
 let shuttingDown = false
 async function shutdown(reason: string): Promise<void> {
