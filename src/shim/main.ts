@@ -153,11 +153,12 @@ const rpc = await connectRpcClient({
       )
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e)
+      const code = (e as { code?: number })?.code
       // A protocol-version mismatch can't be recovered by reconnecting
       // — the daemon's contract is incompatible with this shim binary.
       // Bail hard so the wrapper can surface "reinstall shim" instead
       // of looping forever pretending to be connected.
-      if (m.includes(String(ERR_PROTOCOL_MISMATCH)) || m.includes('protocol mismatch')) {
+      if (code === ERR_PROTOCOL_MISMATCH || m.includes('protocol mismatch')) {
         ctx.proc.stderr(`[choros-shim] ${m} — exiting; reinstall the matching shim\n`)
         ctx.proc.exit(2)
         return
@@ -257,7 +258,8 @@ const heartbeatInterval = setInterval(() => {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes(String(ERR_UNKNOWN_SESSION)) || msg.includes('not registered')) {
+      const code = (err as { code?: number })?.code
+      if (code === ERR_UNKNOWN_SESSION || msg.includes('not registered')) {
         ctx.proc.stderr('[choros-shim] heartbeat: session unknown — forcing reconnect\n')
         // Route through shutdown() rather than a bare rpc.close + exit
         // so the heartbeat interval is cleared, the deregister timeout

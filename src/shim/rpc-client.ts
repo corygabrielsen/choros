@@ -25,6 +25,12 @@ interface PendingHandler {
   timer: ReturnType<typeof setTimeout>
 }
 
+/** Error carrying the daemon's numeric JSON-RPC code so callers branch
+ *  on the code, not the prose message. */
+export interface RpcClientError extends Error {
+  code?: number
+}
+
 /** Max bytes for a single NDJSON frame from the daemon. Matches the
  *  daemon's server-side cap so the shim never wedges on an oversized
  *  drain frame. */
@@ -79,8 +85,15 @@ export async function connectRpcClient(opts: {
     if (!handler) return
     pending.delete(msg.id)
     clearTimeout(handler.timer)
-    if ('error' in msg) handler.reject(new Error(`rpc: ${msg.error.message}`))
-    else handler.resolve(msg.result)
+    if ('error' in msg) {
+      // Carry the numeric JSON-RPC code on the Error so callers can
+      // branch on the code (ERR_UNKNOWN_SESSION, ERR_PROTOCOL_MISMATCH)
+      // rather than substring-matching the prose message — which
+      // silently breaks if the daemon's wording changes.
+      const err = new Error(`rpc: ${msg.error.message}`) as RpcClientError
+      err.code = msg.error.code
+      handler.reject(err)
+    } else handler.resolve(msg.result)
   }
 
   function onData(chunk: Buffer): void {
@@ -114,7 +127,11 @@ export async function connectRpcClient(opts: {
 
   function scheduleReconnect(): void {
     if (closed || reconnectTimer) return
-    const delay = reconnectDelay
+    // ±20% jitter so a daemon restart doesn't wake every shim + the
+    // gh-bridge in lockstep (thundering herd of simultaneous register
+    // round-trips). Backoff caps the rate; jitter de-synchronizes the
+    // phase.
+    const delay = Math.round(reconnectDelay * (0.8 + Math.random() * 0.4))
     reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS)
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
@@ -245,7 +262,13 @@ export async function connectRpcClient(opts: {
   // daemon appears, and onConnect (register) fires on first success.
   try {
     await open()
-  } catch {
+  } catch (e) {
+    // Log — every other failure path here writes to stderr; a silent
+    // initial-connect failure makes a persistent misconfig (wrong
+    // socket path, perms) indistinguishable from "daemon not up yet."
+    process.stderr.write(
+      `[choros-rpc] initial connect failed (${e instanceof Error ? e.message : e}); retrying with backoff\n`,
+    )
     scheduleReconnect()
   }
   return client

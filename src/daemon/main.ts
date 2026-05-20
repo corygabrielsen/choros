@@ -37,7 +37,26 @@ import {
 
 const VERSION = '1.0.0'
 
-const STATE_ROOT = resolveStateRootFromEnv()
+// Resolve all paths up front. A bad env override (e.g. a relative
+// CHOROS_STATE_HOME) makes the resolvers throw — and this runs at
+// module top level, before the uncaughtException handler is installed,
+// so an unguarded throw dies with a raw stack. Frame it.
+let STATE_ROOT: string
+let SOCKET_PATH: string
+let ADMIN_SOCKET_PATH: string
+let DB_PATH: string
+let LOCK_PATH: string
+try {
+  STATE_ROOT = resolveStateRootFromEnv()
+  SOCKET_PATH = daemonSocketPath()
+  ADMIN_SOCKET_PATH = adminSocketPath()
+  DB_PATH = databasePath()
+  LOCK_PATH = lockfilePath()
+} catch (e: unknown) {
+  const m = e instanceof Error ? e.message : String(e)
+  process.stderr.write(`[choros-daemon] bad configuration: ${m}\n`)
+  process.exit(1)
+}
 // 0700 so the SQLite database (which holds message bodies +
 // agent_status/intent set by other CCs) isn't world-traversable. The
 // sockets each chmod themselves to 0600, but without this dir mode
@@ -52,11 +71,6 @@ try {
   const m = e instanceof Error ? e.message : String(e)
   process.stderr.write(`[choros-daemon] STATE_ROOT chmod failed: ${m}\n`)
 }
-
-const SOCKET_PATH = daemonSocketPath()
-const ADMIN_SOCKET_PATH = adminSocketPath()
-const DB_PATH = databasePath()
-const LOCK_PATH = lockfilePath()
 
 function isPidAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) return false
