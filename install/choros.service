@@ -20,9 +20,11 @@ ExecStart=/usr/bin/env bun run %h/code/choros/src/daemon/main.ts
 Restart=on-failure
 RestartSec=5
 
-# Sandbox: daemon only needs to read its own source and write its
-# state dir. XDG_STATE_HOME defaults to ~/.local/state under
-# systemd-user.
+# The daemon writes its state under ~/.local/state/choros (or
+# $CHOROS_STATE_HOME if set). systemd --user runs with a stripped PATH
+# that lacks bun's dir — install.sh writes a PATH drop-in
+# (choros.service.d/override.conf) so `env bun` resolves; without it the
+# unit exits 127.
 Environment=NODE_ENV=production
 
 # Choros runs as a foreground process; let systemd own stdout/stderr.

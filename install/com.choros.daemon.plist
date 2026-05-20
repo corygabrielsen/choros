@@ -30,6 +30,17 @@
         <string>HOME_PLACEHOLDER/code/choros/src/daemon/main.ts</string>
     </array>
 
+    <!--
+      launchd does not inherit the login shell's PATH, so a bare `bun`
+      won't resolve. install.sh substitutes BUN_DIR_PLACEHOLDER with
+      bun's actual directory at install time.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>BUN_DIR_PLACEHOLDER:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
     <key>RunAtLoad</key>
     <true/>
 
