@@ -139,6 +139,18 @@ describe('daemon foundation (Phase 1)', () => {
     const daemon = spawnTestDaemon()
     try {
       const client = await connectTestClient(daemon.socketPath)
+      // Register first — the auth boundary gates non-register methods
+      // behind a session binding, so an unknown method from an
+      // unregistered connection returns "not registered" rather than
+      // method-not-found. A real client is always registered.
+      await client.call('choros.register', {
+        protocol_version: PROTOCOL_VERSION,
+        session_id: 'ffffffff-0000-1111-2222-333333333333',
+        display_name: null,
+        host: 'h',
+        cwd: '/tmp',
+        pid: 1,
+      })
       await expect(client.call('choros.does_not_exist', {})).rejects.toThrow(/unknown method/)
       await client.close()
     } finally {

@@ -421,21 +421,46 @@ describe('authz + error-contract regressions (post bug-r5/r6 saturation)', () =>
     }
   })
 
-  test('set_status / set_intent / set_display_name on unknown session error', async () => {
+  test('unregistered connection cannot call non-register methods', async () => {
     const daemon = spawnTestDaemon()
     try {
       const client = await connectTestClient(daemon.socketPath)
-      // Caller hasn't registered; the session row doesn't exist.
+      // The auth boundary requires a session binding (via register)
+      // before any other method — an unregistered connection is
+      // rejected, no silent success.
       await expect(
         client.call('choros.set_status', { session_id: PEER_A, text: 'wat' }),
-      ).rejects.toThrow(/unknown session/)
-      await expect(
-        client.call('choros.set_intent', { session_id: PEER_A, text: 'wat' }),
-      ).rejects.toThrow(/unknown session/)
-      await expect(
-        client.call('choros.set_display_name', { session_id: PEER_A, display_name: 'wat' }),
-      ).rejects.toThrow(/unknown session/)
+      ).rejects.toThrow(/not registered/)
+      await expect(client.call('choros.inbox', { session_id: PEER_A })).rejects.toThrow(
+        /not registered/,
+      )
       await client.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('a session cannot act as another by passing a foreign session_id', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      // Bob's connection passes Alice's session_id — the daemon binds
+      // identity to the connection, so this is rejected even though
+      // both are the same local user.
+      await expect(bob.call('choros.inbox', { session_id: PEER_A })).rejects.toThrow(
+        /does not match/,
+      )
+      await expect(
+        bob.call('choros.set_status', { session_id: PEER_A, text: 'pwned' }),
+      ).rejects.toThrow(/does not match/)
+      // Alice's own status is untouched.
+      const row = daemon.storage.db
+        .query('SELECT agent_status FROM sessions WHERE id = ?')
+        .get(PEER_A) as { agent_status: string | null }
+      expect(row.agent_status).toBeNull()
+      await alice.close()
+      await bob.close()
     } finally {
       await daemon.stop()
     }

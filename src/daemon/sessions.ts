@@ -86,6 +86,15 @@ export class SessionRouter {
     return this.displayName.get(sessionId)
   }
 
+  /** The session id bound to a connection's sink, or null if the sink
+   *  hasn't registered. The dispatch boundary uses this to verify a
+   *  request's `session_id` param actually belongs to the calling
+   *  connection — without it any local session could act as another
+   *  by passing a foreign session_id. */
+  sessionForSink(sink: NotificationSink): string | null {
+    return this.sessionBySink.get(sink) ?? null
+  }
+
   /** Sink for a session, or null if not currently connected. The null
    *  case means the daemon should buffer notifications via
    *  `enqueuePendingNotification`. On a stale (closed) sink, drop ALL

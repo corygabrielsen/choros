@@ -23,7 +23,9 @@ import {
   ERR_INTERNAL,
   ERR_INVALID_REQUEST,
   ERR_METHOD_NOT_FOUND,
+  ERR_NOT_AUTHORIZED,
   ERR_PARSE,
+  ERR_UNKNOWN_SESSION,
   type RpcError,
   type RpcRequest,
   type RpcResponse,
@@ -174,7 +176,37 @@ function processLine(line: string, sink: NotificationSink, ctx: HandlerCtx): Rpc
   return { jsonrpc: '2.0', id: req.id, result: outcome }
 }
 
+/** Auth boundary: every method except register requires the calling
+ *  connection to be bound to a session (via a prior register), and any
+ *  `session_id` in the params MUST equal that bound session. Without
+ *  this, a connected shim could pass a foreign `session_id` and read
+ *  or act as another local session — the handlers themselves trust the
+ *  param. register is exempt because it establishes the binding;
+ *  heartbeat on an unbound connection returns ERR_UNKNOWN_SESSION,
+ *  which is the shim's re-register trigger. */
+function authorize(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): RpcError | null {
+  if (req.method === 'choros.register') return null
+  const bound = ctx.router.sessionForSink(sink)
+  if (bound === null) {
+    return { code: ERR_UNKNOWN_SESSION, message: 'not registered' }
+  }
+  const params = req.params
+  const claimed =
+    params && typeof params === 'object' && 'session_id' in params
+      ? (params as Record<string, unknown>).session_id
+      : undefined
+  if (typeof claimed === 'string' && claimed !== bound) {
+    return {
+      code: ERR_NOT_AUTHORIZED,
+      message: 'session_id does not match the calling connection',
+    }
+  }
+  return null
+}
+
 function dispatch(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): RpcError | unknown {
+  const denied = authorize(req, sink, ctx)
+  if (denied) return denied
   try {
     switch (req.method) {
       case 'choros.register':
