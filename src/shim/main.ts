@@ -128,12 +128,31 @@ async function emitDaemonNotification(method: string, params: unknown): Promise<
   }
 }
 
+// Set true once shutdown begins; gates registration + heartbeat so a
+// late re-register can't resurrect a session the clean shutdown tore
+// down, and a tick can't run mid-teardown. Declared up here so the
+// registration owner below can read it.
+let shuttingDown = false
+
+// Single registration owner: at most one register/re-register in
+// flight at a time. onConnect (every reconnect) and the heartbeat
+// unknown-session path both go through ensureRegistered, so overlapping
+// triggers coalesce onto one round-trip instead of stacking 2-3.
+let registerInFlight: Promise<void> | null = null
+function ensureRegistered(client: RpcClient): Promise<void> {
+  if (shuttingDown) return Promise.resolve()
+  if (registerInFlight) return registerInFlight
+  registerInFlight = registerWithDaemon(client).finally(() => {
+    registerInFlight = null
+  })
+  return registerInFlight
+}
+
 /** Register (or re-register) this session with the daemon over an open
  *  connection: drains any buffered notifications and refreshes the
- *  cached display name. Called from onConnect on every (re)connect AND
- *  from the heartbeat handler when the daemon reports the session
- *  unknown — re-registering in place rather than exiting the process.
- *  Throws on protocol mismatch (unrecoverable). */
+ *  cached display name. Always go through {@link ensureRegistered}, not
+ *  this directly, so concurrent triggers coalesce. Throws on protocol
+ *  mismatch (unrecoverable). */
 async function registerWithDaemon(client: RpcClient): Promise<void> {
   cachedDisplayName = await currentDisplayName()
   const result = await client.call<RegisterResult>('choros.register', {
@@ -159,7 +178,7 @@ const rpc = await connectRpcClient({
   },
   onConnect: async (client): Promise<void> => {
     try {
-      await registerWithDaemon(client)
+      await ensureRegistered(client)
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e)
       const code = (e as { code?: number })?.code
@@ -262,8 +281,13 @@ async function syncDisplayName(): Promise<void> {
 /** One heartbeat tick: heartbeat + rename detection, with in-place
  *  re-register if the daemon reports the session unknown (post-
  *  reconnect window or a genuine drop). Never exits — a dropped
- *  heartbeat is transient and the reconnect loop handles disconnects. */
+ *  heartbeat is transient and the reconnect loop handles disconnects.
+ *  Non-reentrant: a slow tick (awaiting a re-register up to the call
+ *  timeout) must not overlap the next interval firing. */
+let heartbeatRunning = false
 async function heartbeatTick(): Promise<void> {
+  if (heartbeatRunning || shuttingDown) return
+  heartbeatRunning = true
   try {
     await rpc.call('choros.heartbeat', { session_id: ME, pid: ctx.proc.pid() })
     await syncDisplayName()
@@ -274,24 +298,26 @@ async function heartbeatTick(): Promise<void> {
       // The daemon doesn't know this session — either a genuine drop
       // (admin cleared the row) or the brief window after a reconnect
       // before register lands (the auth boundary reports "not
-      // registered" until the binding exists). Re-register in place;
+      // registered" until the binding exists). Re-register in place via
+      // the registration owner (coalesces with onConnect's register);
       // do NOT exit — exiting kills the MCP server for the whole CC
       // session.
       ctx.proc.stderr('[choros-shim] heartbeat: session unknown — re-registering\n')
       try {
-        await registerWithDaemon(rpc)
+        await ensureRegistered(rpc)
       } catch (e: unknown) {
         const rm = e instanceof Error ? e.message : String(e)
         ctx.proc.stderr(`[choros-shim] re-register failed: ${rm}\n`)
       }
     }
     /* else transient disconnect: the reconnect loop re-registers */
+  } finally {
+    heartbeatRunning = false
   }
 }
 
 const heartbeatInterval = setInterval(() => void heartbeatTick(), HEARTBEAT_INTERVAL_MS)
 
-let shuttingDown = false
 async function shutdown(reason: string): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
