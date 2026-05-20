@@ -287,6 +287,17 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   })
 }
 
+// Defense in depth: a stray rejection/exception must not take the MCP
+// server down without a trace. Log and keep running — the RPC client
+// reconnects on its own, and the MCP host stays up for the user.
+process.on('unhandledRejection', reason => {
+  const m = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+  ctx.proc.stderr(`[choros-shim] unhandledRejection: ${m}\n`)
+})
+process.on('uncaughtException', err => {
+  ctx.proc.stderr(`[choros-shim] uncaughtException: ${err.stack ?? err.message}\n`)
+})
+
 ctx.proc.stderr(
   `[choros-shim] v${SHIM_VERSION} session=${ME} (source=${identity.source}) daemon=${DAEMON_SOCK}\n`,
 )

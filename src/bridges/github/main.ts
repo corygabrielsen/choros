@@ -56,8 +56,11 @@ const rpc = await connectRpcClient({
       )
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e)
-      process.stderr.write(`[choros-gh-bridge] register failed: ${m}\n`)
-      process.exit(1)
+      // Don't exit — the reconnect loop will retry register on the
+      // next successful connect. Exiting here would let a transient
+      // daemon hiccup kill a webhook receiver that GitHub is actively
+      // delivering to.
+      process.stderr.write(`[choros-gh-bridge] register failed (will retry): ${m}\n`)
     }
   },
 })
@@ -145,3 +148,14 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     void shutdown(sig).finally(() => process.exit(0))
   })
 }
+
+// Defense in depth: a stray rejection/exception must not silently kill
+// the webhook receiver. Log and keep serving — the RPC client
+// reconnects on its own.
+process.on('unhandledRejection', reason => {
+  const m = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+  process.stderr.write(`[choros-gh-bridge] unhandledRejection: ${m}\n`)
+})
+process.on('uncaughtException', err => {
+  process.stderr.write(`[choros-gh-bridge] uncaughtException: ${err.stack ?? err.message}\n`)
+})

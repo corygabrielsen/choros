@@ -235,6 +235,18 @@ export async function connectRpcClient(opts: {
     },
   }
 
-  await open()
+  // Cold start must tolerate a daemon that isn't up yet. Bun.connect
+  // rejects with ENOENT (socket absent) or ECONNREFUSED (stale inode
+  // from a SIGKILL'd daemon) — if that propagated, the caller's
+  // top-level `await connectRpcClient(...)` would crash the process
+  // before it could install its MCP handlers, surfacing as a "failed"
+  // MCP server. Instead, swallow the initial failure and arm the
+  // backoff loop; `call()` rejects with "not connected" until the
+  // daemon appears, and onConnect (register) fires on first success.
+  try {
+    await open()
+  } catch {
+    scheduleReconnect()
+  }
   return client
 }
