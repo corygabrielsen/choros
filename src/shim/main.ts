@@ -103,10 +103,10 @@ const server = new Server(
     // server:choros` for these notifications to surface.
     capabilities: { experimental: { 'claude/channel': {} }, tools: {} },
     instructions:
-      'Messages from other Claude Code sessions arrive as <channel source="choros" from_name="<sender>" msg_id="<id>" ...> events ' +
-      '(also source="choros-ack"/"choros-reaction"/"choros-read"/"choros-presence"/"choros-roster" for delivery/engagement/presence signals). ' +
+      'Messages from other Claude Code sessions arrive as <channel source="choros" kind="choros" from_name="<sender>" msg_id="<id>" ...> events. ' +
+      'The kind attribute names the sub-event: kind="choros" is a peer message; "choros-ack" (status=delivered|dropped) is a delivery receipt; "choros-reaction"/"choros-read_receipt"/"choros-presence"/"choros-roster" are engagement/presence signals. ' +
       'To reply, call the choros send tool with to=<from_name> (and in_reply_to=<msg_id> to thread). ' +
-      'Mark a message handled with the choros mark_read tool passing its msg_id. Act on inbound messages; do not ignore them.',
+      'Mark a message handled with the choros mark_read tool passing its msg_id. Act on inbound peer messages; do not ignore them.',
   },
 )
 
@@ -130,16 +130,20 @@ process.stderr.on('error', () => {
 })
 
 async function emitDaemonNotification(method: string, params: unknown): Promise<void> {
-  // Daemon notification methods mirror MCP channel sources:
-  //   choros.inbound_message → source="choros"
-  //   choros.ack             → source="choros-ack"
-  //   choros.reaction        → source="choros-reaction"
-  //   choros.read_receipt    → source="choros-read"
-  //   choros.presence        → source="choros-presence"
-  const source = method.replace(/^choros\./, 'choros-').replace('choros-inbound_message', 'choros')
+  // Each daemon notification maps to a channel sub-event `kind`. This is
+  // `kind`, NOT `source`: Claude Code sets the channel tag's `source`
+  // attribute from the server name ("choros"), so a meta `source` renders
+  // a second, conflicting `source=` on the tag. Read `kind` for the type:
+  //   choros.inbound_message → kind="choros"
+  //   choros.ack             → kind="choros-ack"
+  //   choros.reaction        → kind="choros-reaction"
+  //   choros.read_receipt    → kind="choros-read_receipt"
+  //   choros.presence        → kind="choros-presence"
+  //   choros.roster          → kind="choros-roster"
+  const kind = method.replace(/^choros\./, 'choros-').replace('choros-inbound_message', 'choros')
   const p = (params ?? {}) as Record<string, unknown>
   const content = typeof p.body === 'string' ? p.body : ''
-  const meta: Record<string, string> = { source }
+  const meta: Record<string, string> = { kind }
   for (const [k, v] of Object.entries(p)) {
     if (k === 'body') continue
     if (typeof v === 'string') meta[k] = v

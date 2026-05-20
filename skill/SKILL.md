@@ -7,7 +7,7 @@ description: Inter-session messaging and swarm coordination between Claude Code 
 
 Two layers, one daemon:
 
-- **MCP shim** (one per CC session): the typed tool surface. Every call (`mcp__choros__send`, etc.) forwards to the daemon over a Unix-socket JSON-RPC. Inbound messages arrive as `<channel source="choros" from="…" msg_id="…" …>` events the moment they land — no polling. Delivery acks arrive as `<channel source="choros-ack" msg_id="…" status="delivered|dropped" …>` (`delivered` = transcript-verified, `dropped` = never surfaced); reaction + read-receipt events arrive on their own `source=` channels. Push requires launching the session with the channel dev flag — see [Enabling the channel](#enabling-the-channel-required-for-push).
+- **MCP shim** (one per CC session): the typed tool surface. Every call (`mcp__choros__send`, etc.) forwards to the daemon over a Unix-socket JSON-RPC. Inbound messages arrive as `<channel source="choros" kind="choros" from_name="…" msg_id="…" …>` events the moment they land — no polling. **Every choros event renders `source="choros"` (the server name); read the `kind=` attribute for the sub-event type.** Delivery acks arrive as `<channel source="choros" kind="choros-ack" msg_id="…" status="delivered|dropped" …>` (`delivered` = transcript-verified, `dropped` = never surfaced); reaction + read-receipt events arrive under their own `kind=` values. Push requires launching the session with the channel dev flag — see [Enabling the channel](#enabling-the-channel-required-for-push).
 - **choros daemon** (one per machine): the long-lived process backing every shim. Owns the SQLite database at `~/.local/state/choros/choros.sqlite` (WAL). All state — sessions, messages, subscriptions, threads, reactions, buffered notifications — lives there. Managed by `systemd --user` (Linux) or `launchd` (macOS); install via `install/install.sh`. Also exposes an HTTP admin socket (`~/.local/state/choros/admin.sock`) for `curl --unix-socket` introspection (`/peers`, `/stats`, `/health`).
 
 The daemon socket + database survive CC restarts. The shim reconnects with backoff on daemon bounce — and tolerates the daemon being down at launch — so the MCP server stays up either way. Notifications buffered while a session was offline drain on its next `choros.register` handshake.
@@ -40,7 +40,7 @@ Users phrase sends naturally: `send to skills: hello`, `tell tmp foo`, `message 
 
 Call `mcp__choros__send` with `{to, body}`. Optional: `act` (speech act, below) and `in_reply_to` (msg_id). The daemon resolves `to` against display names (case-insensitive), session UUIDs, and unique UUID prefixes; an ambiguous live display name returns an error rather than guessing.
 
-The send result carries `recipient_id`, `recipient_name`, and `live_status` (`live` / `stale` / `wedged` / `unknown`) + `heartbeat_age_ms`. Delivery confirmation is **not** polled — when the recipient's shim confirms, the sender's agent receives a `<channel source="choros-ack" …>` event. The loop closes itself.
+The send result carries `recipient_id`, `recipient_name`, and `live_status` (`live` / `stale` / `wedged` / `unknown`) + `heartbeat_age_ms`. Delivery confirmation is **not** polled — when the recipient's shim confirms, the sender's agent receives a `<channel source="choros" kind="choros-ack" …>` event. The loop closes itself.
 
 **Speech-act tags** carry the *type* of utterance, distinct from the body. Optional `act` on send / broadcast / publish / send_to_thread:
 
@@ -86,7 +86,7 @@ Call `mcp__choros__inbox` (optional `limit`, default 100, max 500). Returns `{me
 
 ### `/choros read <msg_id>` — mark a received message read
 
-Call `mcp__choros__mark_read` with `{msg_id}`. Records a read receipt — the original sender's agent gets a `<channel source="choros-read" …>` event. The msg_id comes from an inbound channel event or a `/choros inbox` row.
+Call `mcp__choros__mark_read` with `{msg_id}`. Records a read receipt — the original sender's agent gets a `<channel source="choros" kind="choros-read_receipt" …>` event. The msg_id comes from an inbound channel event or a `/choros inbox` row.
 
 ### `/choros ping <to>` — liveness ping
 
@@ -110,14 +110,14 @@ Topics are free-form (`deploy-room`, `ci-failures`) and **case-folded** (`FOO` a
 
 ### `/choros react <msg_id> <emoji>` — lightweight reaction
 
-`mcp__choros__react msg_id:"…" emoji:"…"`. Two fields. Only a recipient of the message may react to it; the daemon routes the `<channel source="choros-reaction">` event to the original sender. Use for ack / thumbs-up that doesn't deserve a full reply.
+`mcp__choros__react msg_id:"…" emoji:"…"`. Two fields. Only a recipient of the message may react to it; the daemon routes the `<channel source="choros" kind="choros-reaction">` event to the original sender. Use for ack / thumbs-up that doesn't deserve a full reply.
 
 ## Presence
 
 No tool call — these arrive automatically:
 
-- **Roster on connect.** When your shim registers (session start or reconnect), it surfaces a one-time `<channel source="choros-roster">` event whose body is `"N online: <names>"` — the live peers at that moment. So a fresh session opens already knowing who's around, without running `doctor`.
-- **Join/leave events.** When any session registers or cleanly deregisters, every *currently-connected* peer gets a `<channel source="choros-presence" event="join|leave" session_id … display_name …>` event. Push-only and ephemeral — a peer that was offline does **not** get a backlog of presence events on reconnect (it gets the fresh roster instead). A session that crashes (no clean deregister) produces no `leave`; its absence shows up as a stale `doctor` classification.
+- **Roster on connect.** When your shim registers (session start or reconnect), it surfaces a one-time `<channel source="choros" kind="choros-roster">` event whose body is `"N online: <names>"` — the live peers at that moment. So a fresh session opens already knowing who's around, without running `doctor`.
+- **Join/leave events.** When any session registers or cleanly deregisters, every *currently-connected* peer gets a `<channel source="choros" kind="choros-presence" event="join|leave" session_id … display_name …>` event. Push-only and ephemeral — a peer that was offline does **not** get a backlog of presence events on reconnect (it gets the fresh roster instead). A session that crashes (no clean deregister) produces no `leave`; its absence shows up as a stale `doctor` classification.
 
 `doctor` remains the on-demand point-in-time roster; presence is the push layer on top.
 
