@@ -533,19 +533,31 @@ describe('authz + error-contract regressions (post bug-r5/r6 saturation)', () =>
       // Bob pulls his inbox — both unread, oldest first, with sender name.
       const inbox1 = await bob.call<{
         messages: { msg_id: string; body: string; from_name: string }[]
+        truncated: boolean
       }>('choros.inbox', { session_id: PEER_B })
       expect(inbox1.messages).toHaveLength(2)
       expect(inbox1.messages[0]?.body).toBe('first')
       expect(inbox1.messages[1]?.body).toBe('second')
       expect(inbox1.messages[0]?.from_name).toBe('alice')
+      expect(inbox1.truncated).toBe(false)
+
+      // Row-limit truncation is signalled.
+      const limited = await bob.call<{ messages: unknown[]; truncated: boolean }>('choros.inbox', {
+        session_id: PEER_B,
+        limit: 1,
+      })
+      expect(limited.messages).toHaveLength(1)
+      expect(limited.truncated).toBe(true)
 
       // Mark the first read; inbox now returns only the second.
       await bob.call('choros.mark_read', { session_id: PEER_B, msg_id: s1.msg_id })
-      const inbox2 = await bob.call<{ messages: { body: string }[] }>('choros.inbox', {
-        session_id: PEER_B,
-      })
+      const inbox2 = await bob.call<{ messages: { body: string }[]; truncated: boolean }>(
+        'choros.inbox',
+        { session_id: PEER_B },
+      )
       expect(inbox2.messages).toHaveLength(1)
       expect(inbox2.messages[0]?.body).toBe('second')
+      expect(inbox2.truncated).toBe(false)
 
       await alice.close()
       await bob.close()

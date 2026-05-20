@@ -82,7 +82,7 @@ Call `mcp__choros__doctor` and format `peers` as a table (name, classification, 
 
 ### `/choros inbox` — pull unread messages
 
-Call `mcp__choros__inbox` (optional `limit`, default 100). Returns your unread messages (anything addressed to you — direct, broadcast, topic, thread — not yet `mark_read`'d), oldest first, each with `msg_id`, `from_name`, `body`, `act`, `topic`, `thread_id`, `ts`. This is the recovery path when a push was silently dropped: pull, act, then `mark_read`. The no-arg `/choros` default may show `doctor.self.inbox_unread` as a count and prompt to run `inbox` when it's non-zero.
+Call `mcp__choros__inbox` (optional `limit`, default 100, max 500). Returns `{messages, truncated}` — your unread messages (anything addressed to you — direct, broadcast, topic, thread — not yet `mark_read`'d), oldest first (`ts` then `id`), each with `msg_id`, `from_name`, `body`, `act`, `topic`, `thread_id`, `ts`. `truncated: true` means more remain than fit (row limit or the response byte budget) — `mark_read` what you consumed and pull again to drain the rest. This is the recovery path when a push was silently dropped: pull, act, then `mark_read`. The no-arg `/choros` default may show `doctor.self.inbox_unread` as a count and prompt to run `inbox` when it's non-zero.
 
 ### `/choros read <msg_id>` — mark a received message read
 
