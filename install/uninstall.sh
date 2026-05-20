@@ -40,5 +40,5 @@ case "$PLATFORM" in
     ;;
 esac
 
-echo "[choros] uninstall complete. State at \$XDG_STATE_HOME/choros/ preserved."
-echo "[choros] to wipe state: rm -rf \"\${XDG_STATE_HOME:-\$HOME/.local/state}/choros\""
+echo "[choros] uninstall complete. State at \${CHOROS_STATE_HOME:-\$HOME/.local/state/choros} preserved."
+echo "[choros] to wipe state: rm -rf \"\${CHOROS_STATE_HOME:-\$HOME/.local/state/choros}\""

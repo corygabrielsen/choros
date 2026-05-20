@@ -22,19 +22,22 @@
     <key>Label</key>
     <string>com.choros.daemon</string>
 
+    <!--
+      install.sh substitutes the placeholders at install time:
+        BUN_BIN_PLACEHOLDER  → absolute bun binary (launchd doesn't
+                               inherit the login PATH, so no bare `bun`)
+        CHOROS_ROOT_PLACEHOLDER → the resolved repo root (not a
+                               hardcoded ~/code/choros — the repo may
+                               live elsewhere; must match the
+                               registered shim path)
+    -->
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/env</string>
-        <string>bun</string>
+        <string>BUN_BIN_PLACEHOLDER</string>
         <string>run</string>
-        <string>HOME_PLACEHOLDER/code/choros/src/daemon/main.ts</string>
+        <string>CHOROS_ROOT_PLACEHOLDER/src/daemon/main.ts</string>
     </array>
 
-    <!--
-      launchd does not inherit the login shell's PATH, so a bare `bun`
-      won't resolve. install.sh substitutes BUN_DIR_PLACEHOLDER with
-      bun's actual directory at install time.
-    -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

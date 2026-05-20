@@ -27,13 +27,16 @@ register_mcp() {
   # Register (or re-register) the shim as a user-scope MCP server so
   # the path is always correct. Remove-then-add makes it idempotent and
   # self-healing against a stale entry.
+  # `bun <file>` not `bun run <file>` — the latter stores args=[run,
+  # path]; the working stored form is command=bun, args=[path]. `run`
+  # is redundant for a direct file and argv-fragile.
   if command -v claude >/dev/null 2>&1; then
     claude mcp remove --scope user choros >/dev/null 2>&1 || true
-    claude mcp add --scope user choros -- bun run "$CHOROS_ROOT/src/shim/main.ts"
+    claude mcp add --scope user choros -- bun "$CHOROS_ROOT/src/shim/main.ts"
     echo "[choros] registered MCP shim (user scope) → $CHOROS_ROOT/src/shim/main.ts"
   else
     echo "[choros] 'claude' CLI not found — register the MCP shim manually:" >&2
-    echo "         claude mcp add --scope user choros -- bun run $CHOROS_ROOT/src/shim/main.ts" >&2
+    echo "         claude mcp add --scope user choros -- bun $CHOROS_ROOT/src/shim/main.ts" >&2
   fi
 }
 
@@ -48,15 +51,22 @@ case "$PLATFORM" in
     fi
     ln -s "$UNIT_SRC" "$UNIT_DEST"
     echo "[choros] installed unit: $UNIT_DEST"
-    # systemd --user runs with a minimal PATH (/usr/bin:/bin) that lacks
-    # ~/.local/bin (and ~/.bun/bin), so `/usr/bin/env bun` exits 127.
-    # A drop-in pins PATH to include bun's actual directory. Generated
-    # here (not committed) because bun's location is host-specific.
+    # Drop-in pins two host-specific things the committed unit can't:
+    #   1. PATH including bun's dir (systemd --user has a minimal PATH
+    #      lacking ~/.local/bin → `env bun` exits 127).
+    #   2. ExecStart at the resolved $CHOROS_ROOT with the absolute bun
+    #      binary. The committed unit hardcodes %h/code/choros; if the
+    #      repo lives elsewhere, the daemon and the dynamically-
+    #      registered shim would point at different trees (split-brain).
+    #      The empty `ExecStart=` first clears the unit's value before
+    #      the override (systemd requires this for ExecStart).
     cat > "$DROPIN_DIR/override.conf" <<EOF
 [Service]
 Environment=PATH=$BUN_DIR:/usr/local/bin:/usr/bin:/bin
+ExecStart=
+ExecStart=$BUN_BIN run $CHOROS_ROOT/src/daemon/main.ts
 EOF
-    echo "[choros] wrote PATH drop-in: $DROPIN_DIR/override.conf"
+    echo "[choros] wrote drop-in (PATH + ExecStart): $DROPIN_DIR/override.conf"
     if command -v systemctl >/dev/null 2>&1; then
       systemctl --user daemon-reload
       systemctl --user enable --now choros
@@ -71,9 +81,13 @@ EOF
     PLIST_DEST="$HOME/Library/LaunchAgents/com.choros.daemon.plist"
     LOG_DIR="$HOME/Library/Logs/choros"
     mkdir -p "$(dirname "$PLIST_DEST")" "$LOG_DIR"
-    # launchd plists can't expand $HOME or inherit the login PATH —
-    # substitute both the home dir and bun's directory at install time.
-    sed -e "s|HOME_PLACEHOLDER|$HOME|g" -e "s|BUN_DIR_PLACEHOLDER|$BUN_DIR|g" \
+    # launchd plists can't expand $HOME or inherit the login PATH, and
+    # must point at the resolved repo root (not a hardcoded path) —
+    # substitute home, bun binary+dir, and CHOROS_ROOT at install time.
+    sed -e "s|HOME_PLACEHOLDER|$HOME|g" \
+      -e "s|BUN_BIN_PLACEHOLDER|$BUN_BIN|g" \
+      -e "s|BUN_DIR_PLACEHOLDER|$BUN_DIR|g" \
+      -e "s|CHOROS_ROOT_PLACEHOLDER|$CHOROS_ROOT|g" \
       "$PLIST_SRC" > "$PLIST_DEST"
     echo "[choros] installed agent: $PLIST_DEST"
     if command -v launchctl >/dev/null 2>&1; then
