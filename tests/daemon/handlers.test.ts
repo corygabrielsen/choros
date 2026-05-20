@@ -49,6 +49,75 @@ describe('daemon handlers (Phase 2)', () => {
     }
   })
 
+  test('report_drop fires a dropped ack to the sender', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      const bobInbound = bob.nextNotification('choros.inbound_message')
+      const sent = await alice.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_A,
+        to: PEER_B,
+        body: 'hi',
+      })
+      await bobInbound
+
+      const aliceAck = alice.nextNotification('choros.ack')
+      await bob.call('choros.report_drop', { session_id: PEER_B, msg_id: sent.msg_id })
+      const ack = (await aliceAck) as { msg_id: string; status: string }
+      expect(ack.msg_id).toBe(sent.msg_id)
+      expect(ack.status).toBe('dropped')
+
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('consecutive drops wedge the recipient; a verified delivery clears it', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+
+      for (let i = 0; i < 3; i++) {
+        const inbound = bob.nextNotification('choros.inbound_message')
+        const sent = await alice.call<{ msg_id: string }>('choros.send', {
+          session_id: PEER_A,
+          to: PEER_B,
+          body: `m${i}`,
+        })
+        await inbound
+        await bob.call('choros.report_drop', { session_id: PEER_B, msg_id: sent.msg_id })
+      }
+
+      type Doc = { peers: { session_id: string; classification: string; wedged: boolean }[] }
+      const doc1 = await alice.call<Doc>('choros.doctor', { session_id: PEER_A })
+      const bob1 = doc1.peers.find(p => p.session_id === PEER_B)
+      expect(bob1?.wedged).toBe(true)
+      expect(bob1?.classification).toBe('wedged')
+
+      const inbound = bob.nextNotification('choros.inbound_message')
+      const ok = await alice.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_A,
+        to: PEER_B,
+        body: 'recovered',
+      })
+      await inbound
+      await bob.call('choros.confirm_delivery', { session_id: PEER_B, msg_id: ok.msg_id })
+
+      const doc2 = await alice.call<Doc>('choros.doctor', { session_id: PEER_A })
+      const bob2 = doc2.peers.find(p => p.session_id === PEER_B)
+      expect(bob2?.wedged).toBe(false)
+
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
   test('send-to-self is rejected', async () => {
     const daemon = spawnTestDaemon()
     try {

@@ -95,7 +95,10 @@ export async function resolveDisplayName(opts: {
   return value
 }
 
-async function findJsonl(opts: {
+/** Resolve the on-disk path of this CC session's transcript JSONL, or null
+ *  if it can't be located (non-UUID session, or no matching file). Shared
+ *  by display-name resolution and delivery verification. */
+export async function findJsonl(opts: {
   sessionId: string
   projectsRoot: string
   pwd: string

@@ -29,7 +29,14 @@ import {
   type RegisterResult,
 } from '#choros/protocol/methods.ts'
 import { NOTIFY_ROSTER } from '#choros/protocol/notifications.ts'
-import { resolveDisplayName } from '#choros/shim/display-name.ts'
+import {
+  JSONL_VERIFY_TIMEOUT_MS,
+  jsonlSize,
+  PUSH_TIMEOUT_MS,
+  verifyJsonlReceipt,
+  withTimeout,
+} from '#choros/shim/delivery.ts'
+import { findJsonl, resolveDisplayName } from '#choros/shim/display-name.ts'
 import { connectRpcClient, type RpcClient } from '#choros/shim/rpc-client.ts'
 import { daemonSocketPath, projectsRoot } from '#choros/state-root.ts'
 
@@ -55,6 +62,18 @@ const PROJECTS_ROOT = projectsRoot(ctx)
 function currentDisplayName(): Promise<string | null> {
   if (!identity.meIsUuid) return Promise.resolve(identity.me)
   return resolveDisplayName({
+    sessionId: ME,
+    projectsRoot: PROJECTS_ROOT,
+    pwd: ctx.env.get('PWD') || ctx.proc.cwd(),
+  })
+}
+
+// Locate this session's own CC transcript for delivery verification. Null
+// for synthetic (non-UUID) sessions — they have no transcript, so their
+// pushes are taken on trust rather than verified.
+function locateOwnJsonl(): Promise<string | null> {
+  if (!identity.meIsUuid) return Promise.resolve(null)
+  return findJsonl({
     sessionId: ME,
     projectsRoot: PROJECTS_ROOT,
     pwd: ctx.env.get('PWD') || ctx.proc.cwd(),
@@ -126,32 +145,58 @@ async function emitDaemonNotification(method: string, params: unknown): Promise<
     if (typeof v === 'string') meta[k] = v
     else if (typeof v === 'number' || typeof v === 'boolean') meta[k] = String(v)
   }
+
+  const msgId = method === 'choros.inbound_message' && typeof p.msg_id === 'string' ? p.msg_id : ''
+
+  // Capture the transcript size BEFORE the push so the delta scan starts
+  // past existing history — an older record embedding the same msg_id
+  // can't false-match. Only inbound messages are verified + confirmed.
+  let jsonl: string | null = null
+  let startSize = 0
+  if (msgId) {
+    jsonl = await locateOwnJsonl()
+    startSize = await jsonlSize(jsonl)
+  }
+
+  const pushed = await withTimeout(
+    server.notification({ method: 'notifications/claude/channel', params: { content, meta } }),
+    PUSH_TIMEOUT_MS,
+    m => ctx.proc.stderr(`[choros-shim] push rejected: ${m}\n`),
+  )
+
+  if (!msgId) return
+
+  // Detached: verifying receipt polls the transcript for up to
+  // JSONL_VERIFY_TIMEOUT_MS. Awaiting here would serialize the next inbound
+  // message — and stall a backlog drain — behind this poll.
+  void verifyAndReport(jsonl, startSize, msgId, pushed)
+}
+
+/** Confirm or repudiate a single inbound delivery. A push that resolved
+ *  AND whose msg_id surfaced in this session's own transcript is a real
+ *  delivery → `confirm_delivery` (sender gets `choros.ack status=delivered`).
+ *  A push that timed out, or resolved but never surfaced, is a silent drop
+ *  → `report_drop` (sender gets `status=dropped`; the daemon wedges the
+ *  session after repeated drops). The ack never claims more than the
+ *  transcript proves. */
+async function verifyAndReport(
+  jsonl: string | null,
+  startSize: number,
+  msgId: string,
+  pushed: 'ok' | 'timeout',
+): Promise<void> {
+  // activeClient ?? rpc — never touch `rpc` while activeClient is set
+  // (same object post-init, but `rpc` is in TDZ during the first-connect
+  // drain that can call this).
+  const client = activeClient ?? rpc
+  const delivered =
+    pushed === 'ok' && (await verifyJsonlReceipt(jsonl, msgId, startSize, JSONL_VERIFY_TIMEOUT_MS))
+  const rpcMethod = delivered ? 'choros.confirm_delivery' : 'choros.report_drop'
   try {
-    await server.notification({
-      method: 'notifications/claude/channel',
-      params: { content, meta },
-    })
-    // Inbound messages get a confirm_delivery call so the daemon can
-    // close the loop and fire `choros.ack` back to the original sender.
-    // Fire-and-forget: awaiting the round-trip would serialize the
-    // next inbound message behind this one's ack, halving inbound
-    // throughput.
-    if (method === 'choros.inbound_message' && typeof p.msg_id === 'string') {
-      const msgId = p.msg_id
-      // activeClient ?? rpc — never touch `rpc` while activeClient is
-      // set (it's the same object post-init, but `rpc` is in TDZ during
-      // the first-connect drain that calls this).
-      const client = activeClient ?? rpc
-      client
-        .call('choros.confirm_delivery', { session_id: ME, msg_id: msgId })
-        .catch((e: unknown) => {
-          const m = e instanceof Error ? e.message : String(e)
-          ctx.proc.stderr(`[choros-shim] confirm_delivery failed: ${m}\n`)
-        })
-    }
+    await client.call(rpcMethod, { session_id: ME, msg_id: msgId })
   } catch (e: unknown) {
     const m = e instanceof Error ? e.message : String(e)
-    ctx.proc.stderr(`[choros-shim] notify failed: ${m}\n`)
+    ctx.proc.stderr(`[choros-shim] ${rpcMethod} failed: ${m}\n`)
   }
 }
 

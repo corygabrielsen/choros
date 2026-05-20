@@ -4,7 +4,11 @@ import { handleDeregister } from '#choros/daemon/handlers/deregister.ts'
 import { handleDoctor } from '#choros/daemon/handlers/doctor.ts'
 import { handleHeartbeat } from '#choros/daemon/handlers/heartbeat.ts'
 import { handleInbox } from '#choros/daemon/handlers/inbox.ts'
-import { handleConfirmDelivery, handleMarkRead } from '#choros/daemon/handlers/inbox_ops.ts'
+import {
+  handleConfirmDelivery,
+  handleMarkRead,
+  handleReportDrop,
+} from '#choros/daemon/handlers/inbox_ops.ts'
 import { handlePublish } from '#choros/daemon/handlers/publish.ts'
 import { handleReact } from '#choros/daemon/handlers/react.ts'
 import { type HandlerCtx, handleRegister } from '#choros/daemon/handlers/register.ts'
@@ -245,6 +249,8 @@ function dispatch(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): Rpc
         return handleSendToThread(ctx, req.params)
       case 'choros.confirm_delivery':
         return handleConfirmDelivery(ctx, req.params)
+      case 'choros.report_drop':
+        return handleReportDrop(ctx, req.params)
       case 'choros.mark_read':
         return handleMarkRead(ctx, req.params)
       case 'choros.inbox':

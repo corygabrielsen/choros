@@ -26,6 +26,11 @@ export class SessionRouter {
    *  set_display_name handler. Lets fan-out paths skip a SELECT per
    *  send/broadcast/publish. */
   private displayName = new Map<string, string | null>()
+  /** Consecutive verified-drop count per session. Bumped by report_drop,
+   *  reset by a confirmed delivery. When it crosses the wedge threshold the
+   *  handler marks the session wedged so doctor/send surface a dropping
+   *  push channel instead of silently losing messages. */
+  private dropCounts = new Map<string, number>()
 
   /** Bind a session to a sink. Two stale-entry hazards to clear:
    *
@@ -59,6 +64,7 @@ export class SessionRouter {
     const sink = this.bySession.get(sessionId)
     this.bySession.delete(sessionId)
     this.displayName.delete(sessionId)
+    this.dropCounts.delete(sessionId)
     if (sink) this.sessionBySink.delete(sink)
   }
 
@@ -76,6 +82,7 @@ export class SessionRouter {
       if (this.bySession.get(id) === sink) {
         this.bySession.delete(id)
         this.displayName.delete(id)
+        this.dropCounts.delete(id)
       }
       this.sessionBySink.delete(sink)
     }
@@ -96,6 +103,19 @@ export class SessionRouter {
    *  cache-miss case. */
   displayNameFor(sessionId: string): string | null | undefined {
     return this.displayName.get(sessionId)
+  }
+
+  /** Record a verified delivery drop for a session; returns the new
+   *  consecutive count. */
+  recordDrop(sessionId: string): number {
+    const n = (this.dropCounts.get(sessionId) ?? 0) + 1
+    this.dropCounts.set(sessionId, n)
+    return n
+  }
+
+  /** Reset a session's consecutive-drop count after a confirmed delivery. */
+  clearDrops(sessionId: string): void {
+    this.dropCounts.delete(sessionId)
   }
 
   /** The session id bound to a connection's sink, or null if the sink
