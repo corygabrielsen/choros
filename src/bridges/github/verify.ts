@@ -1,5 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
+/** Speech act for the published merge notice. MUST be a member of the
+ *  daemon's taxonomy (validateSpeechAct) or handlePublish rejects the
+ *  publish with ERR_INVALID_PARAMS and the bridge can never deliver.
+ *  Lives here (side-effect-free module) so a test can assert it's
+ *  valid without importing main.ts's top-level connect/serve. */
+export const MERGE_ACT = 'ANNOUNCE'
+
 /** Verify a GitHub-style HMAC signature header against the raw body.
  *  The header looks like `sha256=<hex>`. Uses constant-time compare
  *  so the verifier can't be timing-probed. */

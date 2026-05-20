@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { extractMergedPullRequest, verifyHmac } from '#choros/bridges/github/verify.ts'
+import { extractMergedPullRequest, MERGE_ACT, verifyHmac } from '#choros/bridges/github/verify.ts'
+import { validateSpeechAct } from '#choros/inbox.ts'
 
 const SECRET = 'test-secret'
 function sign(body: string): string {
@@ -93,5 +94,16 @@ describe('extractMergedPullRequest', () => {
     expect(result?.repo).toBe('')
     expect(result?.title).toBe('')
     expect(result?.merged_by).toBe('')
+  })
+})
+
+describe('MERGE_ACT', () => {
+  test('is a valid speech act the daemon accepts', () => {
+    // Regression guard: the bridge published `act: 'fyi'`, which
+    // validateSpeechAct rejects → handlePublish ERR_INVALID_PARAMS →
+    // the bridge could never deliver a single merge. Pin the act the
+    // bridge actually sends to the daemon's taxonomy.
+    expect(() => validateSpeechAct(MERGE_ACT)).not.toThrow()
+    expect(validateSpeechAct(MERGE_ACT)).toBe(MERGE_ACT)
   })
 })

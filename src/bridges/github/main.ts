@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { extractMergedPullRequest, verifyHmac } from '#choros/bridges/github/verify.ts'
+import { extractMergedPullRequest, MERGE_ACT, verifyHmac } from '#choros/bridges/github/verify.ts'
 import { PROTOCOL_VERSION } from '#choros/protocol/methods.ts'
 /**
  * choros github bridge — translates GitHub webhook events into choros
@@ -28,6 +28,26 @@ const BRIDGE_VERSION = '1.0.0'
 const BRIDGE_SESSION_ID = '00000001-0000-4000-8000-000000000001'
 const BRIDGE_DISPLAY_NAME = 'gh-bridge'
 const TOPIC_PR_MERGED = 'github.pr_merged'
+/** Cap the inbound webhook body before buffering. GitHub PR payloads
+ *  run ~30-100 KB; 1 MiB is generous headroom and bounds the
+ *  unauthenticated buffer. */
+const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024
+/** Remember recent x-github-delivery ids so an at-least-once redelivery
+ *  doesn't double-publish. Bounded ring — GitHub retries within
+ *  minutes, so a few hundred ids is ample. */
+const DEDUP_CAP = 512
+const recentDeliveries = new Set<string>()
+function alreadyHandled(deliveryId: string): boolean {
+  if (!deliveryId) return false
+  if (recentDeliveries.has(deliveryId)) return true
+  recentDeliveries.add(deliveryId)
+  if (recentDeliveries.size > DEDUP_CAP) {
+    // Evict oldest (insertion order) to keep the set bounded.
+    const oldest = recentDeliveries.values().next().value
+    if (oldest !== undefined) recentDeliveries.delete(oldest)
+  }
+  return false
+}
 
 const PORT = Number(process.env.CHOROS_GH_BRIDGE_PORT ?? '4242')
 const SECRET = process.env.CHOROS_GH_WEBHOOK_SECRET ?? ''
@@ -66,7 +86,15 @@ const rpc = await connectRpcClient({
 })
 
 const server = Bun.serve({
+  // Bind loopback only — cloudflared connects from the same host, so
+  // there's no reason to expose the receiver to the LAN. Mirrors the
+  // daemon's 0600-socket posture.
+  hostname: '127.0.0.1',
   port: PORT,
+  // Reject oversized bodies before they're buffered. The webhook is an
+  // unauthenticated endpoint (HMAC is checked after read); without this
+  // a large POST is a memory-exhaustion vector.
+  maxRequestBodySize: MAX_WEBHOOK_BODY_BYTES,
   fetch: async (req): Promise<Response> => {
     if (req.method !== 'POST') return new Response('method not allowed', { status: 405 })
     if (new URL(req.url).pathname !== '/webhook') {
@@ -91,6 +119,13 @@ const server = Bun.serve({
       return new Response('ignored', { status: 200 })
     }
 
+    // GitHub delivery is at-least-once; drop a redelivered id so a
+    // retry (or our own 500-triggered retry) doesn't double-publish.
+    // Checked AFTER HMAC so an attacker can't poison the dedup set.
+    if (alreadyHandled(delivery)) {
+      return new Response('duplicate', { status: 200 })
+    }
+
     let payload: unknown
     try {
       payload = JSON.parse(body)
@@ -110,14 +145,17 @@ const server = Bun.serve({
         session_id: BRIDGE_SESSION_ID,
         topic: TOPIC_PR_MERGED,
         body: bodyText,
-        act: 'fyi',
+        act: MERGE_ACT,
       })
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e)
       process.stderr.write(
         `[choros-gh-bridge] publish failed delivery=${delivery} pr=${merged.repo}#${merged.number}: ${m}\n`,
       )
-      // 500 → GitHub will retry the webhook.
+      // Un-mark so GitHub's retry (triggered by the 500) is allowed to
+      // re-attempt — otherwise a transient daemon-down would dedup the
+      // retry and lose the event permanently.
+      recentDeliveries.delete(delivery)
       return new Response('publish failed', { status: 500 })
     }
     process.stderr.write(
