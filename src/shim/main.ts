@@ -216,6 +216,11 @@ server.setRequestHandler(ListToolsRequestSchema, () =>
         description: 'Mark a received message as read.',
         inputSchema: { type: 'object' },
       },
+      {
+        name: 'inbox',
+        description: 'Pull unread messages addressed to this session.',
+        inputSchema: { type: 'object' },
+      },
     ],
   }),
 )

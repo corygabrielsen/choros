@@ -493,6 +493,42 @@ describe('authz + error-contract regressions (post bug-r5/r6 saturation)', () =>
     }
   })
 
+  test('inbox returns unread messages and respects mark_read', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      const s1 = await alice.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_A,
+        to: PEER_B,
+        body: 'first',
+      })
+      await alice.call('choros.send', { session_id: PEER_A, to: PEER_B, body: 'second' })
+
+      // Bob pulls his inbox — both unread, oldest first, with sender name.
+      const inbox1 = await bob.call<{
+        messages: { msg_id: string; body: string; from_name: string }[]
+      }>('choros.inbox', { session_id: PEER_B })
+      expect(inbox1.messages).toHaveLength(2)
+      expect(inbox1.messages[0]?.body).toBe('first')
+      expect(inbox1.messages[1]?.body).toBe('second')
+      expect(inbox1.messages[0]?.from_name).toBe('alice')
+
+      // Mark the first read; inbox now returns only the second.
+      await bob.call('choros.mark_read', { session_id: PEER_B, msg_id: s1.msg_id })
+      const inbox2 = await bob.call<{ messages: { body: string }[] }>('choros.inbox', {
+        session_id: PEER_B,
+      })
+      expect(inbox2.messages).toHaveLength(1)
+      expect(inbox2.messages[0]?.body).toBe('second')
+
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
   test('topic canonicalization: subscribe(FOO) reaches publish(foo)', async () => {
     const daemon = spawnTestDaemon()
     try {

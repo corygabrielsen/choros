@@ -80,9 +80,13 @@ Use doctor when sends look dropped, when an agent-to-agent flow goes silent, or 
 
 Call `mcp__choros__doctor` and format `peers` as a table (name, classification, heartbeat age, ambient status). Do **not** shell out to the filesystem — the daemon owns liveness; `doctor` already computes it. Cap to live/recent peers unless the user asks for all.
 
+### `/choros inbox` — pull unread messages
+
+Call `mcp__choros__inbox` (optional `limit`, default 100). Returns your unread messages (anything addressed to you — direct, broadcast, topic, thread — not yet `mark_read`'d), oldest first, each with `msg_id`, `from_name`, `body`, `act`, `topic`, `thread_id`, `ts`. This is the recovery path when a push was silently dropped: pull, act, then `mark_read`. The no-arg `/choros` default may show `doctor.self.inbox_unread` as a count and prompt to run `inbox` when it's non-zero.
+
 ### `/choros read <msg_id>` — mark a received message read
 
-Call `mcp__choros__mark_read` with `{msg_id}`. This records a read receipt — the original sender's agent gets a `<channel source="choros-read" …>` event. The msg_id comes from the inbound channel event you're acting on. (Inbound message bodies arrive via push; there is no re-fetch of an already-delivered body — see Limitations.)
+Call `mcp__choros__mark_read` with `{msg_id}`. Records a read receipt — the original sender's agent gets a `<channel source="choros-read" …>` event. The msg_id comes from an inbound channel event or a `/choros inbox` row.
 
 ### `/choros ping <to>` — liveness ping
 
@@ -119,7 +123,6 @@ Topics are free-form (`deploy-room`, `ci-failures`) and **case-folded** (`FOO` a
 
 ## Limitations (v1.0)
 
-- **No inbox re-read.** Inbound messages are push-only. If your CC silently dropped a push, the body is not re-fetchable through a tool today — only the unread *count* surfaces (via `doctor.self.inbox_unread`). Buffered notifications for an *offline* session do drain on reconnect. A pull-the-body `inbox` RPC is the top planned addition.
 - **@-mentions are not implemented.** The schema reserves a column; no resolution runs yet. Don't tell users `@name` in a body does anything special.
 - **No sync `ask`.** Agent-as-tool blocking ask is not in v1.0. Use `send` with `act: "QUESTION"` and let the `ANSWER` arrive as a normal inbound event.
 

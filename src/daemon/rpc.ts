@@ -3,6 +3,7 @@ import { handleBroadcast } from '#choros/daemon/handlers/broadcast.ts'
 import { handleDeregister } from '#choros/daemon/handlers/deregister.ts'
 import { handleDoctor } from '#choros/daemon/handlers/doctor.ts'
 import { handleHeartbeat } from '#choros/daemon/handlers/heartbeat.ts'
+import { handleInbox } from '#choros/daemon/handlers/inbox.ts'
 import { handleConfirmDelivery, handleMarkRead } from '#choros/daemon/handlers/inbox_ops.ts'
 import { handlePublish } from '#choros/daemon/handlers/publish.ts'
 import { handleReact } from '#choros/daemon/handlers/react.ts'
@@ -214,6 +215,8 @@ function dispatch(req: RpcRequest, sink: NotificationSink, ctx: HandlerCtx): Rpc
         return handleConfirmDelivery(ctx, req.params)
       case 'choros.mark_read':
         return handleMarkRead(ctx, req.params)
+      case 'choros.inbox':
+        return handleInbox(ctx, req.params)
       default:
         return { code: ERR_METHOD_NOT_FOUND, message: `unknown method: ${req.method}` }
     }
