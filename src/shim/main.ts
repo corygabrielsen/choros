@@ -75,7 +75,20 @@ let activeClient: RpcClient | undefined
 
 const server = new Server(
   { name: 'choros', version: SHIM_VERSION },
-  { capabilities: { tools: {} } },
+  {
+    // `experimental['claude/channel']` is what registers CC's notification
+    // listener — without it every `notifications/claude/channel` push is
+    // dropped silently. `tools` keeps the two-way surface (send, inbox, …).
+    // Custom channels are off the research-preview allowlist, so each CC
+    // session must still launch with `--dangerously-load-development-channels
+    // server:choros` for these notifications to surface.
+    capabilities: { experimental: { 'claude/channel': {} }, tools: {} },
+    instructions:
+      'Messages from other Claude Code sessions arrive as <channel source="choros" from_name="<sender>" msg_id="<id>" ...> events ' +
+      '(also source="choros-ack"/"choros-reaction"/"choros-read"/"choros-presence"/"choros-roster" for delivery/engagement/presence signals). ' +
+      'To reply, call the choros send tool with to=<from_name> (and in_reply_to=<msg_id> to thread). ' +
+      'Mark a message handled with the choros mark_read tool passing its msg_id. Act on inbound messages; do not ignore them.',
+  },
 )
 
 // The shim forwards every tool call to the daemon; the call's argument
