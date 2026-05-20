@@ -518,6 +518,42 @@ describe('authz + error-contract regressions (post bug-r5/r6 saturation)', () =>
     }
   })
 
+  test('publish accepts a valid act and rejects an invalid one', async () => {
+    // The gh-bridge regression: it published act:'fyi', which is not in
+    // the speech-act taxonomy → handlePublish ERR_INVALID_PARAMS → the
+    // bridge could never deliver. Exercise the real publish-with-act
+    // path the bridge depends on (the MERGE_ACT unit test only pins the
+    // constant, not this delivery).
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      await bob.call('choros.subscribe', { session_id: PEER_B, topic: 'rel' })
+      const inbound = bob.nextNotification('choros.inbound_message')
+      const ok = await alice.call<{ msg_id: string | null }>('choros.publish', {
+        session_id: PEER_A,
+        topic: 'rel',
+        body: 'shipped',
+        act: 'ANNOUNCE',
+      })
+      expect(ok.msg_id).not.toBeNull()
+      const msg = (await inbound) as { act?: string; body: string }
+      expect(msg.act).toBe('ANNOUNCE')
+      await expect(
+        alice.call('choros.publish', {
+          session_id: PEER_A,
+          topic: 'rel',
+          body: 'nope',
+          act: 'fyi',
+        }),
+      ).rejects.toThrow(/act|speech/i)
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
   test('inbox returns unread messages and respects mark_read', async () => {
     const daemon = spawnTestDaemon()
     try {

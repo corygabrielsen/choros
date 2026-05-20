@@ -11,7 +11,7 @@ import {
 } from '#choros/daemon/helpers.ts'
 import { deliverOrBuffer } from '#choros/daemon/notify.ts'
 import { generateMessageId, sanitizeId } from '#choros/identity.ts'
-import { enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
+import { BODY_CAP_BYTES, enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
 import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
 import { NOTIFY_INBOUND_MESSAGE } from '#choros/protocol/notifications.ts'
 
@@ -39,7 +39,7 @@ function parseSendArgs(rawArgs: unknown): SendParsed | RpcError {
   if (isRpcError(session_id)) return session_id
   const to = requireString(obj, 'to', 'send')
   if (isRpcError(to)) return to
-  const body = requireString(obj, 'body', 'send')
+  const body = requireString(obj, 'body', 'send', BODY_CAP_BYTES)
   if (isRpcError(body)) return body
   try {
     enforceBodyCap(body, 'send')

@@ -10,7 +10,7 @@ import {
 } from '#choros/daemon/helpers.ts'
 import { deliverOrBuffer } from '#choros/daemon/notify.ts'
 import { generateMessageId } from '#choros/identity.ts'
-import { enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
+import { BODY_CAP_BYTES, enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
 import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
 import { NOTIFY_INBOUND_MESSAGE } from '#choros/protocol/notifications.ts'
 
@@ -25,7 +25,7 @@ export function handleBroadcast(ctx: HandlerCtx, rawArgs: unknown): BroadcastRes
 
   const session_id = requireString(obj, 'session_id', 'broadcast')
   if (isRpcError(session_id)) return session_id
-  const body = requireString(obj, 'body', 'broadcast')
+  const body = requireString(obj, 'body', 'broadcast', BODY_CAP_BYTES)
   if (isRpcError(body)) return body
   try {
     enforceBodyCap(body, 'broadcast')

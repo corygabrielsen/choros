@@ -8,7 +8,7 @@ import {
 } from '#choros/daemon/helpers.ts'
 import { deliverOrBuffer } from '#choros/daemon/notify.ts'
 import { generateMessageId, sanitizeId } from '#choros/identity.ts'
-import { enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
+import { BODY_CAP_BYTES, enforceBodyCap, validateSpeechAct } from '#choros/inbox.ts'
 import { ERR_INVALID_PARAMS, type RpcError } from '#choros/protocol/methods.ts'
 import { NOTIFY_INBOUND_MESSAGE } from '#choros/protocol/notifications.ts'
 
@@ -200,7 +200,7 @@ export function handleSendToThread(
   if (isRpcError(thread_id_raw)) return thread_id_raw
   const thread_id = requireThreadId(thread_id_raw, 'send_to_thread')
   if (isRpcError(thread_id)) return thread_id
-  const body = requireString(obj, 'body', 'send_to_thread')
+  const body = requireString(obj, 'body', 'send_to_thread', BODY_CAP_BYTES)
   if (isRpcError(body)) return body
   try {
     enforceBodyCap(body, 'send_to_thread')
