@@ -3,15 +3,18 @@
  * choros daemon — long-lived bun process backing every per-session
  * MCP shim.
  *
+ * State root: ~/.local/state/choros (or $CHOROS_STATE_HOME). choros
+ * does NOT honor $XDG_STATE_HOME — see state-root.ts for why.
+ *
  * Sockets:
- *   $XDG_STATE_HOME/choros/daemon.sock  (JSON-RPC for shims)
- *   $XDG_STATE_HOME/choros/admin.sock   (HTTP for humans + cockpit)
+ *   <state-root>/daemon.sock  (JSON-RPC for shims)
+ *   <state-root>/admin.sock   (HTTP for humans + cockpit)
  *
  * Storage:
- *   $XDG_STATE_HOME/choros/choros.sqlite  (WAL-mode SQLite)
+ *   <state-root>/choros.sqlite  (WAL-mode SQLite)
  *
  * Lockfile:
- *   $XDG_STATE_HOME/choros/daemon.lock    (single-instance enforcement)
+ *   <state-root>/daemon.lock    (single-instance enforcement)
  *
  * Lifecycle: launched by systemd / launchd / `bun run daemon`. Single
  * instance per user enforced by the lockfile (which encodes the pid +

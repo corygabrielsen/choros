@@ -15,31 +15,42 @@ function requireAbsolute(name: string, value: string): string {
   return value
 }
 
+/** Resolve the home directory the same way in every launch context.
+ *  `$HOME` first (systemd --user, launchd, and the CC MCP host all set
+ *  it from the login record, so daemon and shim agree), falling back to
+ *  the passwd entry via os.homedir() only when $HOME is unset. Reading
+ *  $HOME consistently is what keeps the daemon's and shim's state-root
+ *  identical — mixing $HOME on one side with os.homedir() on the other
+ *  is the divergence we're avoiding. */
+function resolveHome(envHome: string | undefined): string {
+  const h = envHome?.trim()
+  return h && isAbsolute(h) ? h : homedir()
+}
+
 /** Resolve the choros state root. Order:
- *    1. $CHOROS_STATE_HOME (explicit override)
- *    2. $XDG_STATE_HOME/choros
- *    3. ~/.local/state/choros
- *  Mirrors the ooda-* convention. State is OURS; nothing under ~/.claude.
- *  Trims whitespace on env values so a blank-but-set env var doesn't
- *  silently leak into the path. Both env-sourced paths must be absolute. */
+ *    1. $CHOROS_STATE_HOME (explicit override, must be absolute)
+ *    2. ~/.local/state/choros
+ *
+ *  choros does NOT honor $XDG_STATE_HOME. The daemon (systemd --user,
+ *  XDG unset) and the shim (CC host, inherits the login env) run in
+ *  different contexts; if one saw an XDG override and the other didn't,
+ *  they'd bind different sockets and silently never connect. Keying
+ *  only on $HOME + the explicit CHOROS_STATE_HOME override makes
+ *  resolution identical across both. State is OURS; nothing under
+ *  ~/.claude. */
 export function resolveStateRoot(ctx: Pick<Context, 'env'>): string {
   const explicit = ctx.env.get('CHOROS_STATE_HOME')?.trim()
   if (explicit) return requireAbsolute('CHOROS_STATE_HOME', explicit)
-  const xdg = ctx.env.get('XDG_STATE_HOME')?.trim()
-  if (xdg) return join(requireAbsolute('XDG_STATE_HOME', xdg), 'choros')
-  return join(ctx.env.homedir(), '.local', 'state', 'choros')
+  return join(resolveHome(ctx.env.get('HOME')), '.local', 'state', 'choros')
 }
 
 /** Env-free version of {@link resolveStateRoot} for entry points (daemon
- *  main, shim main) that don't construct a full Context. Reads
- *  `process.env` and `os.homedir()` directly. Both must produce the
- *  same path as the ctx-based version for the same env. */
+ *  main, shim main) that don't construct a full Context. Must produce
+ *  the same path as the ctx-based version for the same env. */
 export function resolveStateRootFromEnv(): string {
   const explicit = process.env.CHOROS_STATE_HOME?.trim()
   if (explicit) return requireAbsolute('CHOROS_STATE_HOME', explicit)
-  const xdg = process.env.XDG_STATE_HOME?.trim()
-  if (xdg) return join(requireAbsolute('XDG_STATE_HOME', xdg), 'choros')
-  return join(homedir(), '.local', 'state', 'choros')
+  return join(resolveHome(process.env.HOME), '.local', 'state', 'choros')
 }
 
 /** The daemon's primary RPC Unix-socket path. */
@@ -72,5 +83,5 @@ export function lockfilePath(): string {
  * session JSONLs and resolve display names) but never writes there.
  */
 export function projectsRoot(ctx: Pick<Context, 'env'>): string {
-  return join(ctx.env.homedir(), '.claude', 'projects')
+  return join(resolveHome(ctx.env.get('HOME')), '.claude', 'projects')
 }

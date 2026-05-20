@@ -5,7 +5,7 @@
  *
  * Per-CC responsibilities:
  *   1. Resolve session identity (UUID + display name) once at boot
- *   2. Connect to `$XDG_STATE_HOME/choros/daemon.sock`
+ *   2. Connect to `~/.local/state/choros/daemon.sock` (or $CHOROS_STATE_HOME)
  *   3. Forward every MCP tool call as a JSON-RPC request, tagged with
  *      this session's id, return the daemon's result verbatim
  *   4. Subscribe to daemon notifications; re-emit each as a CC
