@@ -65,6 +65,13 @@ function currentDisplayName(): Promise<string | null> {
 // by-name to the freshly-renamed session.
 let cachedDisplayName: string | null = null
 
+// The live RPC client, set the first time register runs. emitDaemon-
+// Notification's confirm_delivery needs a client during the first-ever
+// connect's pending-drain — at that point the outer `const rpc` is
+// still in its TDZ (onConnect fires from inside connectRpcClient before
+// the const is assigned), so reaching for `rpc` there would throw.
+let activeClient: RpcClient | undefined
+
 const server = new Server(
   { name: 'choros', version: SHIM_VERSION },
   { capabilities: { tools: {} } },
@@ -117,10 +124,16 @@ async function emitDaemonNotification(method: string, params: unknown): Promise<
     // throughput.
     if (method === 'choros.inbound_message' && typeof p.msg_id === 'string') {
       const msgId = p.msg_id
-      rpc.call('choros.confirm_delivery', { session_id: ME, msg_id: msgId }).catch((e: unknown) => {
-        const m = e instanceof Error ? e.message : String(e)
-        ctx.proc.stderr(`[choros-shim] confirm_delivery failed: ${m}\n`)
-      })
+      // activeClient ?? rpc — never touch `rpc` while activeClient is
+      // set (it's the same object post-init, but `rpc` is in TDZ during
+      // the first-connect drain that calls this).
+      const client = activeClient ?? rpc
+      client
+        .call('choros.confirm_delivery', { session_id: ME, msg_id: msgId })
+        .catch((e: unknown) => {
+          const m = e instanceof Error ? e.message : String(e)
+          ctx.proc.stderr(`[choros-shim] confirm_delivery failed: ${m}\n`)
+        })
     }
   } catch (e: unknown) {
     const m = e instanceof Error ? e.message : String(e)
@@ -154,6 +167,7 @@ function ensureRegistered(client: RpcClient): Promise<void> {
  *  this directly, so concurrent triggers coalesce. Throws on protocol
  *  mismatch (unrecoverable). */
 async function registerWithDaemon(client: RpcClient): Promise<void> {
+  activeClient = client
   cachedDisplayName = await currentDisplayName()
   const result = await client.call<RegisterResult>('choros.register', {
     protocol_version: PROTOCOL_VERSION,
