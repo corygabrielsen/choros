@@ -1,11 +1,12 @@
 # choros
 
-Inter-session messaging and swarm coordination for Claude Code sessions.
+Inter-session messaging and swarm coordination for Claude Code and Codex sessions.
 
 `choros` is a daemon-backed MCP service. One long-lived daemon process
-holds the state; each CC session runs a thin MCP shim that forwards
-tool calls to the daemon over a Unix-socket JSON-RPC. State lives in a
-WAL-mode SQLite database at `$XDG_STATE_HOME/choros/choros.sqlite`.
+holds the state; each agent session gets a thin adapter that forwards
+tool calls and/or push delivery to the daemon over a Unix-socket
+JSON-RPC. State lives in a WAL-mode SQLite database at
+`$XDG_STATE_HOME/choros/choros.sqlite`.
 
 The user-facing docs live in [`skill/SKILL.md`](skill/SKILL.md).
 
@@ -13,7 +14,7 @@ The user-facing docs live in [`skill/SKILL.md`](skill/SKILL.md).
 
 ```
 ┌──────────────────────────┐    ┌──────────────────────────┐
-│ CC session A             │    │ CC session B             │
+│ Agent session A          │    │ Agent session B          │
 │  ┌────────────────────┐  │    │  ┌────────────────────┐  │
 │  │ shim (bun, ~50ms)  │  │    │  │ shim (bun, ~50ms)  │  │
 │  └────────┬───────────┘  │    │  └────────┬───────────┘  │
@@ -33,11 +34,11 @@ The user-facing docs live in [`skill/SKILL.md`](skill/SKILL.md).
         └────────────────────────────────────┘
 ```
 
-The shim contains essentially no business logic. Every MCP tool call
-goes through `choros.<tool>` on the daemon, with the shim's
-`session_id` injected. Notifications flow back over the same
-connection; the shim re-emits them as `mcp.notification` events to its
-CC.
+The shims contain essentially no business logic. Every MCP tool call
+goes through `choros.<tool>` on the daemon, with the session's
+`session_id` injected. Claude Code push notifications flow back over
+the same connection. Codex uses a split adapter: MCP is tool-only, while
+`choros-codex attach` owns app-server delivery for a Codex thread.
 
 ## Quick start
 
@@ -65,6 +66,30 @@ Wire the shim into your Claude Code config:
 The shim auto-discovers the daemon socket at
 `$XDG_STATE_HOME/choros/daemon.sock` (override via `CHOROS_DAEMON_SOCK`).
 
+Codex support is explicit because Codex does not expose Claude's
+`claude/channel` push mechanism. Start the local Codex app-server daemon,
+register the tool-only MCP server, and attach delivery to a thread:
+
+```bash
+codex app-server daemon start
+codex mcp add choros -- bun run /path/to/choros/src/codex/mcp.ts
+
+# In, or for, the target Codex thread:
+choros-codex attach "$CODEX_THREAD_ID"
+```
+
+`choros-codex attach` resumes the app-server thread, registers as the
+session's notification sink, and appends Choros events with
+`thread/inject_items`. Pass `--steer-active` to additionally call
+`turn/steer` when a turn is already running. Delivery acks for Codex mean
+"accepted into the Codex thread's model-visible history"; they are not
+Claude-style transcript/UI proof. See
+[`docs/codex-support.md`](docs/codex-support.md) for the hard seams and
+remaining work. If `codex app-server daemon start` is unavailable in a
+non-standalone Codex install, `choros-codex attach --direct-app-server`
+can run a local stdio app-server process, but the managed control socket
+is the path that can join an already-running thread.
+
 ## Layout
 
 | Path | Role |
@@ -81,6 +106,9 @@ The shim auto-discovers the daemon socket at
 | `src/shim/` | Per-CC MCP server |
 | `src/shim/main.ts` | MCP entry; connects to daemon |
 | `src/shim/rpc-client.ts` | Reconnecting JSON-RPC client |
+| `src/codex/` | Codex app-server attachment and tool-only MCP shim |
+| `src/codex/main.ts` | `choros-codex attach` entry; owns Codex push delivery |
+| `src/codex/mcp.ts` | Codex MCP entry; tools only, no notification sink |
 | `src/protocol/` | Shared shim ↔ daemon contract |
 | `src/protocol/methods.ts` | Request/response shapes; `PROTOCOL_VERSION` |
 | `src/protocol/notifications.ts` | Push event names |
@@ -103,6 +131,7 @@ bun run test:watch    # bun:test --watch
 bun run test:cov      # bun:test --coverage
 bun run check         # lint + typecheck + tests (pre-commit gate)
 bun run daemon        # run daemon in foreground for development
+bun run codex-attach  # attach Choros delivery to $CODEX_THREAD_ID
 ```
 
 A `simple-git-hooks` pre-commit hook runs `bun run check`; install it via

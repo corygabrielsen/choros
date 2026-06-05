@@ -148,6 +148,31 @@ export function upsertSession(
     ) as SessionRow
 }
 
+/** Upsert identity metadata without claiming a live notification lock.
+ *  Tool-only adapters use this to authenticate daemon calls for a
+ *  session while a separate process owns push delivery. */
+export function upsertSessionMetadata(
+  storage: Storage,
+  args: {
+    id: string
+    display_name: string | null
+    host: string
+    cwd: string
+  },
+): SessionRow {
+  return storage.db
+    .query(
+      `INSERT INTO sessions (id, display_name, host, cwd, lock_pid, lock_started_at, heartbeat_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, NULL)
+       ON CONFLICT(id) DO UPDATE SET
+         display_name = excluded.display_name,
+         host = excluded.host,
+         cwd = excluded.cwd
+       RETURNING *`,
+    )
+    .get(args.id, args.display_name, args.host, args.cwd) as SessionRow
+}
+
 /** Clear the lock_pid for a session at clean shutdown. Row history is
  *  preserved so threads / message history remain queryable. */
 export function clearSessionLock(storage: Storage, sessionId: string): void {

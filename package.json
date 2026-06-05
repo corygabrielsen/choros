@@ -12,6 +12,8 @@
   },
   "bin": {
     "choros": "src/shim/main.ts",
+    "choros-codex": "src/codex/main.ts",
+    "choros-codex-mcp": "src/codex/mcp.ts",
     "choros-daemon": "src/daemon/main.ts",
     "choros-gh-bridge": "src/bridges/github/main.ts",
     "choros-doctor": "src/selftest.ts"
@@ -24,6 +26,7 @@
     "test:watch": "bun test --watch",
     "test:cov": "bun test --coverage",
     "daemon": "bun run src/daemon/main.ts",
+    "codex-attach": "bun run src/codex/main.ts attach",
     "gh-bridge": "bun run src/bridges/github/main.ts",
     "doctor": "bun run src/selftest.ts",
     "lint": "biome check .",

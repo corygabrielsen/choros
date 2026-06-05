@@ -14,7 +14,7 @@
 /** Protocol version negotiated at `choros.register`. Daemon refuses
  *  shims with a mismatch and surfaces a human-readable error. Bump on
  *  every breaking wire change. */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 /** Standard JSON-RPC 2.0 request envelope. */
 export interface RpcRequest<P = unknown> {
@@ -71,6 +71,11 @@ export interface RegisterArgs {
   /** Process pid of the shim, used by the daemon to detect dead shims
    *  during heartbeat aggregation. */
   pid: number
+  /** Whether this connection is the live notification sink for the
+   *  session. Defaults to true for legacy Claude shims. Tool-only
+   *  Codex MCP shims bind for authorization but leave delivery to the
+   *  app-server adapter. */
+  receive_notifications?: boolean
 }
 
 export interface RosterEntry {

@@ -43,20 +43,34 @@ export class SessionRouter {
    *     on one connection — register-as-A then register-as-B): drop the
    *     prior session's forward entry, else `bySession` keeps a dangling
    *     `A→sink` and notifications addressed to A get delivered to B's
-   *     connection (cross-session leak). Symmetric to unbindBySink. */
-  bind(sessionId: string, sink: NotificationSink, displayName: string | null): void {
+   *     connection (cross-session leak). Symmetric to unbindBySink.
+   *
+   *  Tool-only bindings authorize requests for `sessionId` without
+   *  becoming the notification sink. This lets a Codex MCP tool server
+   *  coexist with a Codex app-server adapter that owns delivery. */
+  bind(
+    sessionId: string,
+    sink: NotificationSink,
+    displayName: string | null,
+    opts: { receiveNotifications?: boolean } = {},
+  ): void {
+    const receiveNotifications = opts.receiveNotifications ?? true
     const priorSink = this.bySession.get(sessionId)
-    if (priorSink && priorSink !== sink) {
+    if (receiveNotifications && priorSink && priorSink !== sink) {
       this.sessionBySink.delete(priorSink)
     }
     const priorSession = this.sessionBySink.get(sink)
     if (priorSession !== undefined && priorSession !== sessionId) {
-      this.bySession.delete(priorSession)
-      this.displayName.delete(priorSession)
+      if (this.bySession.get(priorSession) === sink) {
+        this.bySession.delete(priorSession)
+        this.displayName.delete(priorSession)
+      }
     }
-    this.bySession.set(sessionId, sink)
     this.sessionBySink.set(sink, sessionId)
-    this.displayName.set(sessionId, displayName)
+    if (receiveNotifications) {
+      this.bySession.set(sessionId, sink)
+      this.displayName.set(sessionId, displayName)
+    }
   }
 
   /** Drop a session binding by id. Used by the deregister handler. */

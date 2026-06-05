@@ -403,6 +403,65 @@ describe('daemon handlers (Phase 2)', () => {
       await daemon.stop()
     }
   })
+
+  test('tool-only register authorizes without draining pending notifications', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'alice')
+      await alice.call('choros.send', { session_id: PEER_A, to: PEER_B, body: 'while-offline' })
+
+      const beforeToolOnly = daemon.storage.db
+        .query('SELECT COUNT(*) AS n FROM pending_notifications WHERE session_id = ?')
+        .get(PEER_B) as { n: number }
+      expect(beforeToolOnly.n).toBe(1)
+
+      const bobTool = await connectTestClient(daemon.socketPath)
+      const toolOnlyResult = (await bobTool.call('choros.register', {
+        protocol_version: PROTOCOL_VERSION,
+        session_id: PEER_B,
+        display_name: 'bob',
+        host: 'test',
+        cwd: '/tmp',
+        pid: 42,
+        receive_notifications: false,
+      })) as { pending: unknown[] }
+      expect(toolOnlyResult.pending).toHaveLength(0)
+
+      const inbox = await bobTool.call<{ messages: { body: string }[] }>('choros.inbox', {
+        session_id: PEER_B,
+      })
+      expect(inbox.messages.map(m => m.body)).toEqual(['while-offline'])
+
+      const afterToolOnly = daemon.storage.db
+        .query('SELECT COUNT(*) AS n FROM pending_notifications WHERE session_id = ?')
+        .get(PEER_B) as { n: number }
+      expect(afterToolOnly.n).toBe(1)
+
+      const bobNotify = await connectTestClient(daemon.socketPath)
+      const notifyResult = (await bobNotify.call('choros.register', {
+        protocol_version: PROTOCOL_VERSION,
+        session_id: PEER_B,
+        display_name: 'bob',
+        host: 'test',
+        cwd: '/tmp',
+        pid: 43,
+      })) as { pending: { method: string; params: { body: string } }[] }
+      expect(notifyResult.pending).toHaveLength(1)
+      expect(notifyResult.pending[0]?.method).toBe('choros.inbound_message')
+      expect(notifyResult.pending[0]?.params.body).toBe('while-offline')
+
+      const afterNotify = daemon.storage.db
+        .query('SELECT COUNT(*) AS n FROM pending_notifications WHERE session_id = ?')
+        .get(PEER_B) as { n: number }
+      expect(afterNotify.n).toBe(0)
+
+      await alice.close()
+      await bobTool.close()
+      await bobNotify.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
 })
 
 describe('authz + error-contract regressions (post bug-r5/r6 saturation)', () => {

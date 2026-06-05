@@ -3,7 +3,11 @@ import { DISPLAY_NAME_MAX_BYTES, nowMsFromCtx } from '#choros/daemon/helpers.ts'
 import { broadcastPresence } from '#choros/daemon/notify.ts'
 import type { NotificationSink, SessionRouter } from '#choros/daemon/sessions.ts'
 import type { Storage } from '#choros/daemon/storage.ts'
-import { drainPendingNotifications, upsertSession } from '#choros/daemon/storage.ts'
+import {
+  drainPendingNotifications,
+  upsertSession,
+  upsertSessionMetadata,
+} from '#choros/daemon/storage.ts'
 import {
   ERR_INVALID_PARAMS,
   ERR_PROTOCOL_MISMATCH,
@@ -59,6 +63,12 @@ function validateRegisterArgs(args: unknown): RpcError | RegisterArgs {
   if (typeof a.pid !== 'number' || !Number.isFinite(a.pid)) {
     return { code: ERR_INVALID_PARAMS, message: 'register: pid must be a finite number' }
   }
+  if (a.receive_notifications !== undefined && typeof a.receive_notifications !== 'boolean') {
+    return {
+      code: ERR_INVALID_PARAMS,
+      message: 'register: receive_notifications must be a boolean when provided',
+    }
+  }
   return a as unknown as RegisterArgs
 }
 
@@ -78,16 +88,28 @@ export function handleRegister(
       message: `register: protocol mismatch — shim ${parsed.protocol_version}, daemon ${PROTOCOL_VERSION}; reinstall the matching shim binary`,
     }
   }
-  upsertSession(ctx.storage, {
-    id: parsed.session_id,
-    display_name: parsed.display_name,
-    host: parsed.host,
-    cwd: parsed.cwd,
-    pid: parsed.pid,
-    nowIso: ctx.nowIso(),
-  })
-  ctx.router.bind(parsed.session_id, sink, parsed.display_name)
-  const pending = drainPendingNotifications(ctx.storage, parsed.session_id)
+  const receiveNotifications = parsed.receive_notifications ?? true
+  if (receiveNotifications) {
+    upsertSession(ctx.storage, {
+      id: parsed.session_id,
+      display_name: parsed.display_name,
+      host: parsed.host,
+      cwd: parsed.cwd,
+      pid: parsed.pid,
+      nowIso: ctx.nowIso(),
+    })
+  } else {
+    upsertSessionMetadata(ctx.storage, {
+      id: parsed.session_id,
+      display_name: parsed.display_name,
+      host: parsed.host,
+      cwd: parsed.cwd,
+    })
+  }
+  ctx.router.bind(parsed.session_id, sink, parsed.display_name, { receiveNotifications })
+  const pending = receiveNotifications
+    ? drainPendingNotifications(ctx.storage, parsed.session_id)
+    : []
 
   // Roster: other registered sessions with a fresh heartbeat. Returned
   // so the freshly-connected shim can show "who's online" without a
@@ -101,9 +123,11 @@ export function handleRegister(
     )
     .all(parsed.session_id, liveCutoff) as RegisterResult['roster']
 
-  // Tell the live peers this session arrived (push-only, post-bind so
-  // the joiner itself is excluded by connectedSessionIds).
-  broadcastPresence(ctx, 'join', parsed.session_id, parsed.display_name)
+  if (receiveNotifications) {
+    // Tell the live peers this session arrived (push-only, post-bind so
+    // the joiner itself is excluded by connectedSessionIds).
+    broadcastPresence(ctx, 'join', parsed.session_id, parsed.display_name)
+  }
 
   return {
     daemon_version: ctx.daemon.version,

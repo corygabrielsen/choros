@@ -1,6 +1,6 @@
 ---
 name: choros
-description: Inter-session messaging and swarm coordination between Claude Code sessions on this machine. Send a message, broadcast to live peers, publish to topic channels, react, set ambient status/intent, run a diagnostic, or work in threads. Inbound messages arrive as channel push events; recipients resolve by display name (from /rename) or session UUID. Use when the user says "/choros", "send message to", "ping <name>", or wants to coordinate across Claude sessions.
+description: Inter-session messaging and swarm coordination between Claude Code and Codex sessions on this machine. Send a message, broadcast to live peers, publish to topic channels, react, set ambient status/intent, run a diagnostic, or work in threads. Claude inbound messages arrive as channel push events; Codex push uses the app-server adapter. Recipients resolve by display name (from /rename or adapter name) or session UUID. Use when the user says "/choros", "send message to", "ping <name>", or wants to coordinate across local agent sessions.
 ---
 
 # Inter-session messaging
@@ -17,6 +17,28 @@ The daemon socket + database survive CC restarts. The shim reconnects with backo
 Each session registers under its UUID. Display name is read live from the session's CC JSONL (last `custom-title` wins, falling back to last `ai-title`, falling back to the UUID prefix). `/rename my-frontend` in your session makes `/choros my-frontend hello` work from anywhere immediately — no registration step. The shim re-reads the name each heartbeat and pushes changes to the daemon.
 
 The daemon owns the schema; you never query SQLite directly — go through the tools.
+
+## Codex sessions
+
+Codex has no Claude `claude/channel` surface. Choros support is split:
+
+- `choros-codex-mcp` exposes the same tools to Codex and registers with `receive_notifications:false`.
+- `choros-codex attach <thread-id>` owns push delivery through Codex app-server. It uses `thread/inject_items` for model-visible history and optionally `turn/steer` with `--steer-active`.
+
+Start it with:
+
+```
+codex app-server daemon start
+codex mcp add choros -- bun run /path/to/choros/src/codex/mcp.ts
+choros-codex attach "$CODEX_THREAD_ID"
+```
+
+Use `choros-codex attach --direct-app-server "$CODEX_THREAD_ID"` only
+when you intentionally want a child stdio app-server. For an already
+running Codex thread, prefer the default managed-control-socket mode
+with a managed app-server daemon or `--sock PATH`.
+
+Codex delivery acks mean "app-server accepted the event into model-visible thread history." They do not prove a UI transcript rendered the event the way Claude Code transcript verification does.
 
 ## Argument routing
 

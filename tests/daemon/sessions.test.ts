@@ -43,4 +43,16 @@ describe('SessionRouter', () => {
     expect(router.sessionForSink(sink)).toBe('A')
     expect(router.connectedSessionIds()).toEqual(['A'])
   })
+
+  test('tool-only binding authorizes without stealing notification sink', () => {
+    const router = new SessionRouter()
+    const notify = fakeSink()
+    const tool = fakeSink()
+    router.bind('A', notify, 'alice')
+    router.bind('A', tool, 'alice', { receiveNotifications: false })
+    expect(router.sinkFor('A')).toBe(notify)
+    expect(router.sessionForSink(notify)).toBe('A')
+    expect(router.sessionForSink(tool)).toBe('A')
+    expect(router.connectedSessionIds()).toEqual(['A'])
+  })
 })
