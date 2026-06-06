@@ -149,6 +149,104 @@ describe('daemon handlers (Phase 2)', () => {
     }
   })
 
+  test('set_display_name evicts a prior holder of the same name', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'shared')
+      const carol = await registerClient(daemon, PEER_C, 'carol')
+      // Carol must see alice's synthetic rename (shared → null) when bob
+      // claims the name. Arm before bob registers so bob's join is
+      // consumed first and doesn't collide with the rename frame.
+      const carolJoin = carol.nextNotification('choros.presence')
+      const bob = await registerClient(daemon, PEER_B, 'bob')
+      await carolJoin
+
+      const evictionSeen = carol.nextNotification('choros.presence')
+      await bob.call('choros.set_display_name', { session_id: PEER_B, display_name: 'shared' })
+      const evt = (await evictionSeen) as {
+        event: string
+        session_id: string
+        display_name: string | null
+        old_name: string | null
+      }
+      expect(evt.event).toBe('rename')
+      expect(evt.session_id).toBe(PEER_A)
+      expect(evt.display_name).toBeNull()
+      expect(evt.old_name).toBe('shared')
+
+      // Routing by "shared" must now reach bob, not alice. Use a send
+      // with `to: "shared"` as the observable signal.
+      const bobInbound = bob.nextNotification('choros.inbound_message')
+      const sent = await carol.call<{ msg_id: string }>('choros.send', {
+        session_id: PEER_C,
+        to: 'shared',
+        body: 'route check',
+      })
+      const inbound = (await bobInbound) as { from_session: string; to_session: string }
+      expect(inbound.to_session).toBe(PEER_B)
+      expect(sent.msg_id).toBeDefined()
+
+      await alice.close()
+      await bob.close()
+      await carol.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('register evicts a prior holder of the claimed display_name', async () => {
+    const daemon = spawnTestDaemon()
+    try {
+      const alice = await registerClient(daemon, PEER_A, 'shared')
+      // alice keeps the name until bob registers with the same one.
+      const bob = await registerClient(daemon, PEER_B, 'shared')
+
+      // Routing by "shared" goes to bob (the newer holder), not alice.
+      const bobInbound = bob.nextNotification('choros.inbound_message')
+      await alice.call('choros.send', {
+        session_id: PEER_A,
+        to: 'shared',
+        body: 'who has it',
+      })
+      const inbound = (await bobInbound) as { to_session: string }
+      expect(inbound.to_session).toBe(PEER_B)
+
+      await alice.close()
+      await bob.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
+  test('resolveRecipient ignores a stale holder past the freshness cutoff', async () => {
+    // Stub `nowIso` so we can age a session past DEAD_AGE_MS without
+    // sleeping in the test. Each call to nowIso returns the same value,
+    // so heartbeat_at on register stays at T0 and the resolver sees a
+    // delta of TRAVEL_MS at send time.
+    const TRAVEL_MS = 11 * 60 * 1000 // > DEAD_AGE_MS (10 min)
+    const T0 = Date.parse('2026-01-01T00:00:00.000Z')
+    let nowMs = T0
+    const daemon = spawnTestDaemon({ nowIso: () => new Date(nowMs).toISOString() })
+    try {
+      // Stale session registers at T0 with display_name "ghost".
+      const ghost = await registerClient(daemon, PEER_A, 'ghost')
+      await ghost.close()
+
+      // Travel past DEAD_AGE_MS and bring up a live sender. The sender
+      // tries to route to "ghost" — should fail, not silently route to
+      // the now-stale PEER_A.
+      nowMs = T0 + TRAVEL_MS
+      const sender = await registerClient(daemon, PEER_B, 'sender')
+      await expect(
+        sender.call('choros.send', { session_id: PEER_B, to: 'ghost', body: 'hello?' }),
+      ).rejects.toThrow(/unknown recipient/)
+
+      await sender.close()
+    } finally {
+      await daemon.stop()
+    }
+  })
+
   test('send-to-self is rejected', async () => {
     const daemon = spawnTestDaemon()
     try {

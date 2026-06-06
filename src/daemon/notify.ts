@@ -43,6 +43,38 @@ export function deliverOrBuffer(
   }
 }
 
+/** Last-writer-wins: clear `display_name` on every session other than
+ *  `claimingSessionId` that currently holds `name` (case-insensitive),
+ *  drop their router cache entries, and broadcast a synthetic rename
+ *  (name → null) so live peers update without waiting for a doctor or
+ *  the next leave/join cycle. Without this, two sessions can coexist
+ *  with the same display name and `resolveRecipient`'s tier-3 fallback
+ *  silently routes by-name traffic to whichever wrote heartbeat_at most
+ *  recently. */
+export function evictDisplayNameHolders(
+  ctx: HandlerCtx,
+  name: string,
+  claimingSessionId: string,
+): void {
+  const evicted = ctx.storage.db
+    .query(
+      `SELECT id FROM sessions
+       WHERE display_name = ? COLLATE NOCASE AND id != ?`,
+    )
+    .all(name, claimingSessionId) as { id: string }[]
+  if (evicted.length === 0) return
+  ctx.storage.db
+    .query(
+      `UPDATE sessions SET display_name = NULL
+       WHERE display_name = ? COLLATE NOCASE AND id != ?`,
+    )
+    .run(name, claimingSessionId)
+  for (const e of evicted) {
+    ctx.router.setDisplayName(e.id, null)
+    broadcastPresence(ctx, 'rename', e.id, null, name)
+  }
+}
+
 /** Fan out a join/leave/rename presence event to every currently-connected
  *  peer (excluding the subject). Push-only — presence is ephemeral, so
  *  unlike deliverOrBuffer it does NOT enqueue for offline sessions (a

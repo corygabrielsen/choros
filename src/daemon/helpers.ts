@@ -1,4 +1,4 @@
-import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
+import { DEAD_AGE_MS, LIVE_MAX_AGE_MS } from '#choros/constants.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { NIL_UUID, UUID_RE } from '#choros/identity.ts'
 import { ERR_INVALID_PARAMS, ERR_NOT_FOUND, type RpcError } from '#choros/protocol/methods.ts'
@@ -148,13 +148,22 @@ export function resolveRecipient(
   // most recently would cause traffic to oscillate between them and
   // contradicts the UUID-prefix branch below, which rejects ambiguity.
   // Only fall back to "most recent" when no live session matches.
+  //
+  // Live = bound (lock_pid set) AND heartbeat within LIVE_MAX_AGE_MS.
+  // `lock_pid` alone is insufficient: a crashed shim leaves lock_pid
+  // set until explicit deregister, so a heartbeat freshness check is
+  // needed to keep stale rows from intercepting routing.
+  const nowMs = nowMsFromCtx(ctx)
+  const liveCutoff = new Date(nowMs - LIVE_MAX_AGE_MS).toISOString()
   const liveByName = ctx.storage.db
     .query(
       `SELECT id, display_name FROM sessions
-       WHERE display_name = ? COLLATE NOCASE AND lock_pid IS NOT NULL
-       ORDER BY heartbeat_at DESC NULLS LAST LIMIT 2`,
+       WHERE display_name = ? COLLATE NOCASE
+         AND lock_pid IS NOT NULL
+         AND heartbeat_at > ?
+       ORDER BY heartbeat_at DESC LIMIT 2`,
     )
-    .all(target) as { id: string; display_name: string | null }[]
+    .all(target, liveCutoff) as { id: string; display_name: string | null }[]
   if (liveByName.length === 1 && liveByName[0]) return liveByName[0]
   if (liveByName.length > 1) {
     return {
@@ -162,13 +171,20 @@ export function resolveRecipient(
       message: `ambiguous recipient "${target}" — multiple live sessions share this display name`,
     }
   }
+  // Freshness gate: only route by name to a recently-active session.
+  // Without this, a session that owned `target` weeks ago (and whose
+  // shim long since died) intercepts traffic addressed to a name no
+  // currently-running peer holds. `DEAD_AGE_MS` is the same threshold
+  // that classifies a peer "dead" everywhere else.
+  const freshCutoff = new Date(nowMs - DEAD_AGE_MS).toISOString()
   const byName = ctx.storage.db
     .query(
       `SELECT id, display_name FROM sessions
        WHERE display_name = ? COLLATE NOCASE
-       ORDER BY heartbeat_at DESC NULLS LAST LIMIT 1`,
+         AND heartbeat_at > ?
+       ORDER BY heartbeat_at DESC LIMIT 1`,
     )
-    .get(target) as { id: string; display_name: string | null } | null
+    .get(target, freshCutoff) as { id: string; display_name: string | null } | null
   if (byName) return byName
   // UUID prefix match (must be unambiguous). Use GLOB rather than
   // LIKE so SQLite reduces the prefix query to an index range scan;

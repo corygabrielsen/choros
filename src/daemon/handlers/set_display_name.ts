@@ -6,7 +6,7 @@ import {
   optionalString,
   requireString,
 } from '#choros/daemon/helpers.ts'
-import { broadcastPresence } from '#choros/daemon/notify.ts'
+import { broadcastPresence, evictDisplayNameHolders } from '#choros/daemon/notify.ts'
 import { ERR_UNKNOWN_SESSION, type RpcError } from '#choros/protocol/methods.ts'
 
 export interface SetDisplayNameResult {
@@ -35,6 +35,13 @@ export function handleSetDisplayName(
   // Prior name (cached) so a real change can be announced to live peers.
   const cached = ctx.router.displayNameFor(session_id)
   const previous = cached === undefined ? null : cached
+
+  // Claim the name from any prior holder before writing it to this
+  // session — so the post-write read of `display_name` returns this
+  // session unambiguously.
+  if (value !== null) {
+    evictDisplayNameHolders(ctx, value, session_id)
+  }
 
   const result = ctx.storage.db
     .query('UPDATE sessions SET display_name = ? WHERE id = ?')

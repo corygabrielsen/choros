@@ -293,6 +293,15 @@ server.setRequestHandler(ListToolsRequestSchema, () =>
 )
 
 server.setRequestHandler(CallToolRequestSchema, async req => {
+  // Sync the display name before forwarding so the first message after
+  // a /rename stamps the new `from_name` — without this the daemon
+  // only learns the new name on the next heartbeat tick (up to
+  // HEARTBEAT_INTERVAL_MS later) and any send/broadcast in the gap
+  // ships with the pre-rename name (or null, for first-ever sessions).
+  // Cheap when the name is unchanged: resolveDisplayName has an
+  // mtime+size fs-cache and syncDisplayName short-circuits on no
+  // delta, so the steady-state cost is one stat() call.
+  await syncDisplayName()
   const args = injectSession(req.params.arguments as Record<string, unknown> | undefined)
   const result = await rpc.call(`choros.${req.params.name}`, args)
   // Compact JSON — pretty-print costs ~2× bytes + CPU per tool call

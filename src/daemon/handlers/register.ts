@@ -1,6 +1,6 @@
 import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
 import { DISPLAY_NAME_MAX_BYTES, nowMsFromCtx } from '#choros/daemon/helpers.ts'
-import { broadcastPresence } from '#choros/daemon/notify.ts'
+import { broadcastPresence, evictDisplayNameHolders } from '#choros/daemon/notify.ts'
 import type { NotificationSink, SessionRouter } from '#choros/daemon/sessions.ts'
 import type { Storage } from '#choros/daemon/storage.ts'
 import {
@@ -89,6 +89,9 @@ export function handleRegister(
     }
   }
   const receiveNotifications = parsed.receive_notifications ?? true
+  if (parsed.display_name !== null) {
+    evictDisplayNameHolders(ctx, parsed.display_name, parsed.session_id)
+  }
   if (receiveNotifications) {
     upsertSession(ctx.storage, {
       id: parsed.session_id,
