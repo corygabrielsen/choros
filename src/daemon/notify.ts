@@ -45,12 +45,16 @@ export function deliverOrBuffer(
 
 /** Last-writer-wins: clear `display_name` on every session other than
  *  `claimingSessionId` that currently holds `name` (case-insensitive),
- *  drop their router cache entries, and broadcast a synthetic rename
- *  (name → null) so live peers update without waiting for a doctor or
- *  the next leave/join cycle. Without this, two sessions can coexist
- *  with the same display name and `resolveRecipient`'s tier-3 fallback
- *  silently routes by-name traffic to whichever wrote heartbeat_at most
- *  recently. */
+ *  drop their router cache entries, and broadcast a `name_evicted`
+ *  presence event so live peers update without waiting for a doctor
+ *  or the next leave/join cycle. Without this, two sessions can
+ *  coexist with the same display name and `resolveRecipient`'s tier-3
+ *  fallback silently routes by-name traffic to whichever wrote
+ *  heartbeat_at most recently. The event uses its own kind (not
+ *  `rename`) because LWW eviction is system-mediated bookkeeping — a
+ *  recipient that conflated it with a voluntary rename would log
+ *  "<peer> renamed itself to nothing" instead of "<peer> lost the
+ *  name to <claimant>". */
 export function evictDisplayNameHolders(
   ctx: HandlerCtx,
   name: string,
@@ -71,7 +75,41 @@ export function evictDisplayNameHolders(
     .run(name, claimingSessionId)
   for (const e of evicted) {
     ctx.router.setDisplayName(e.id, null)
-    broadcastPresence(ctx, 'rename', e.id, null, name)
+    broadcastNameEviction(ctx, e.id, name, claimingSessionId)
+  }
+}
+
+/** Fan out a `name_evicted` presence event when LWW bookkeeping
+ *  pulls a display name away from a prior holder. Skipped recipients:
+ *  the evictee (subject; symmetric with broadcastPresence) AND the
+ *  claimant (already knows it took the name — telling them again is
+ *  redundant noise that reads as "your prior self renamed itself"). */
+function broadcastNameEviction(
+  ctx: HandlerCtx,
+  evictedSessionId: string,
+  evictedName: string,
+  claimedBySessionId: string,
+): void {
+  const body = `${evictedSessionId.slice(0, 8)} lost the name "${evictedName}" to ${claimedBySessionId.slice(0, 8)}`
+  const params: Record<string, unknown> = {
+    event: 'name_evicted',
+    session_id: evictedSessionId,
+    display_name: null,
+    old_name: evictedName,
+    claimed_by: claimedBySessionId,
+    body,
+    ts: ctx.nowIso(),
+  }
+  const frame = JSON.stringify({ jsonrpc: '2.0', method: NOTIFY_PRESENCE, params })
+  for (const peerId of ctx.router.connectedSessionIds()) {
+    if (peerId === evictedSessionId || peerId === claimedBySessionId) continue
+    const sink = ctx.router.sinkFor(peerId)
+    if (!sink) continue
+    try {
+      sink.write(frame)
+    } catch {
+      /* dead-sink during best-effort fan-out — presence is non-durable */
+    }
   }
 }
 

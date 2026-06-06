@@ -161,18 +161,27 @@ describe('daemon handlers (Phase 2)', () => {
       const bob = await registerClient(daemon, PEER_B, 'bob')
       await carolJoin
 
+      // Carol sees TWO presence events from this one rename: the
+      // name_evicted (alice losing the name) AND bob's own rename
+      // (null → shared). Arm both before triggering so neither is
+      // dropped. We only assert on the eviction; the rename's shape
+      // is covered by other tests.
       const evictionSeen = carol.nextNotification('choros.presence')
+      const bobRenameSeen = carol.nextNotification('choros.presence')
       await bob.call('choros.set_display_name', { session_id: PEER_B, display_name: 'shared' })
+      await bobRenameSeen
       const evt = (await evictionSeen) as {
         event: string
         session_id: string
         display_name: string | null
         old_name: string | null
+        claimed_by: string
       }
-      expect(evt.event).toBe('rename')
+      expect(evt.event).toBe('name_evicted')
       expect(evt.session_id).toBe(PEER_A)
       expect(evt.display_name).toBeNull()
       expect(evt.old_name).toBe('shared')
+      expect(evt.claimed_by).toBe(PEER_B)
 
       // Routing by "shared" must now reach bob, not alice. Use a send
       // with `to: "shared"` as the observable signal.
