@@ -45,6 +45,15 @@ import { CHOROS_TOOLS } from '#choros/tools.ts'
 const SHIM_VERSION = '1.0.0'
 const HEARTBEAT_INTERVAL_MS = 30_000
 const DEREGISTER_TIMEOUT_MS = 500
+/** Fast-cadence display-name poll for the first minute after register.
+ *  CC sometimes writes `~/.claude/sessions/<pid>.json` later than the
+ *  shim's startup-retry budget (~1s) — particularly on `--continue` and
+ *  `--resume "name"` where the metadata file appears tens of seconds in.
+ *  Without this, `from_name` is null until the first 30s heartbeat tick
+ *  catches up; with it, the window is bounded by `BACKFILL_INTERVAL_MS`.
+ *  Self-clears as soon as a non-null name lands. */
+const BACKFILL_INTERVAL_MS = 3_000
+const BACKFILL_MAX_ATTEMPTS = 20 // ~60s of coverage, then heartbeat takes over
 
 const ctx = realContext({
   notify(): Promise<void> {
@@ -406,6 +415,21 @@ async function heartbeatTick(): Promise<void> {
 }
 
 const heartbeatInterval = setInterval(() => void heartbeatTick(), HEARTBEAT_INTERVAL_MS)
+
+/** Backfill loop: re-poll the CC session file every BACKFILL_INTERVAL_MS
+ *  until display_name lands or the attempt budget runs out. Kicks off
+ *  once at module load; the first attempt that returns a non-null name
+ *  pushes via syncDisplayName and clears the interval. */
+let backfillAttempts = 0
+const backfillInterval = setInterval(() => {
+  backfillAttempts++
+  if (cachedDisplayName !== null || backfillAttempts >= BACKFILL_MAX_ATTEMPTS || shuttingDown) {
+    clearInterval(backfillInterval)
+    return
+  }
+  void syncDisplayName()
+}, BACKFILL_INTERVAL_MS)
+backfillInterval.unref?.()
 
 async function shutdown(reason: string): Promise<void> {
   if (shuttingDown) return
