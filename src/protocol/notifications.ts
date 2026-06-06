@@ -23,3 +23,9 @@ export const NOTIFY_REACTION = 'choros.reaction'
 export const NOTIFY_READ_RECEIPT = 'choros.read_receipt'
 export const NOTIFY_PRESENCE = 'choros.presence'
 export const NOTIFY_ROSTER = 'choros.roster'
+/** Daemon lifecycle events: `shutting_down` (emitted by the daemon
+ *  to every live peer just before closing sockets) and `restarted`
+ *  (emitted by the shim when a fresh daemon's `started_at` differs
+ *  from the prior register's). Lets each CC explain a burst of
+ *  rejoin notifications instead of surfacing them naked. */
+export const NOTIFY_DAEMON = 'choros.daemon'

@@ -1,6 +1,6 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { enqueuePendingNotification } from '#choros/daemon/storage.ts'
-import { NOTIFY_PRESENCE } from '#choros/protocol/notifications.ts'
+import { NOTIFY_DAEMON, NOTIFY_PRESENCE } from '#choros/protocol/notifications.ts'
 
 /** Schedule a notification for delivery to `sessionId`'s shim. If the
  *  shim is currently connected, the notification is written
@@ -72,6 +72,36 @@ export function evictDisplayNameHolders(
   for (const e of evicted) {
     ctx.router.setDisplayName(e.id, null)
     broadcastPresence(ctx, 'rename', e.id, null, name)
+  }
+}
+
+/** Announce a daemon-lifecycle transition to every currently-connected
+ *  peer. Push-only and best-effort — no buffering, no retry; called
+ *  during shutdown when there is no opportunity to drain anything.
+ *  The shim re-emits as a `choros.daemon` channel event so the CC can
+ *  frame the burst of disconnect/rejoin notifications that follows.
+ *  Caller supplies `body` (one-line human prose) and the meta payload. */
+export function broadcastDaemonLifecycle(
+  ctx: HandlerCtx,
+  event: 'shutting_down',
+  body: string,
+): void {
+  const params = {
+    event,
+    body,
+    ts: ctx.nowIso(),
+    daemon_version: ctx.daemon.version,
+    daemon_started_at: ctx.daemon.startedAt,
+  }
+  const frame = JSON.stringify({ jsonrpc: '2.0', method: NOTIFY_DAEMON, params })
+  for (const peerId of ctx.router.connectedSessionIds()) {
+    const sink = ctx.router.sinkFor(peerId)
+    if (!sink) continue
+    try {
+      sink.write(frame)
+    } catch {
+      /* sinks dying during shutdown is expected — no recovery here */
+    }
   }
 }
 

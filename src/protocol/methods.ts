@@ -86,6 +86,11 @@ export interface RosterEntry {
 export interface RegisterResult {
   daemon_version: string
   protocol_version: number
+  /** Daemon process start time, ISO-8601. Shim caches this and emits a
+   *  `choros.daemon` `restarted` event on any subsequent register
+   *  whose value differs — so the CC can frame the burst of peer-
+   *  rejoin notifications that follow a daemon bounce. */
+  daemon_started_at: string
   /** Buffered notifications queued while the session was offline,
    *  drained on this register call. The shim should re-emit each via
    *  mcp.notification to its CC before processing live traffic. */

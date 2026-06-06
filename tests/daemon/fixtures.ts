@@ -36,7 +36,7 @@ export function spawnTestDaemon(opts?: { nowIso?: () => string }): TestDaemon {
   const ctx: HandlerCtx = {
     storage,
     router,
-    daemon: { version: 'test' },
+    daemon: { version: 'test', startedAt: opts?.nowIso?.() ?? new Date(0).toISOString() },
     nowIso: opts?.nowIso ?? ((): string => new Date().toISOString()),
   }
   const rpc = startRpcServer({ socketPath, ctx })

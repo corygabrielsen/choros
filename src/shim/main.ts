@@ -28,7 +28,7 @@ import {
   PROTOCOL_VERSION,
   type RegisterResult,
 } from '#choros/protocol/methods.ts'
-import { NOTIFY_ROSTER } from '#choros/protocol/notifications.ts'
+import { NOTIFY_DAEMON, NOTIFY_ROSTER } from '#choros/protocol/notifications.ts'
 import { readCcSessionFile, readCcSessionFileWithRetry } from '#choros/shim/cc-session-file.ts'
 import {
   JSONL_VERIFY_TIMEOUT_MS,
@@ -104,6 +104,12 @@ function locateOwnJsonl(): Promise<string | null> {
 // it changes, push the new value to the daemon so peers can route
 // by-name to the freshly-renamed session.
 let cachedDisplayName: string | null = null
+
+// Cached daemon `started_at` from the most recent register handshake.
+// A change across registers means the daemon was restarted between our
+// connect attempts — emit `choros.daemon` `restarted` so the CC can
+// frame the burst of presence rejoin / roster events that follow.
+let cachedDaemonStartedAt: string | null = null
 
 // The live RPC client, set the first time register runs. emitDaemon-
 // Notification's confirm_delivery needs a client during the first-ever
@@ -260,6 +266,23 @@ async function registerWithDaemon(client: RpcClient): Promise<void> {
     cwd: ctx.proc.cwd(),
     pid: ctx.proc.pid(),
   })
+  // Daemon-restart detection: if the cached `started_at` differs from
+  // the value returned by this register, the daemon was restarted
+  // between our last successful register and this one. Emit BEFORE
+  // draining buffered notifications so the CC sees the lifecycle frame
+  // before the rejoin burst it's contextualising.
+  const startedAt = result.daemon_started_at
+  if (startedAt && cachedDaemonStartedAt !== null && cachedDaemonStartedAt !== startedAt) {
+    await emitDaemonNotification(NOTIFY_DAEMON, {
+      event: 'restarted',
+      body: `choros daemon restarted (started ${startedAt}); peers reconnecting`,
+      ts: startedAt,
+      daemon_version: result.daemon_version,
+      daemon_started_at: startedAt,
+      previous_started_at: cachedDaemonStartedAt,
+    })
+  }
+  if (startedAt) cachedDaemonStartedAt = startedAt
   for (const buffered of result.pending) {
     await emitDaemonNotification(buffered.method, buffered.params)
   }

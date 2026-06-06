@@ -24,6 +24,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSyn
 import { dirname } from 'node:path'
 import { startAdminServer } from '#choros/daemon/admin.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
+import { broadcastDaemonLifecycle } from '#choros/daemon/notify.ts'
 import { startRpcServer } from '#choros/daemon/rpc.ts'
 import { SessionRouter } from '#choros/daemon/sessions.ts'
 import { openStorage } from '#choros/daemon/storage.ts'
@@ -159,10 +160,15 @@ function trackHandler<T>(p: Promise<T>): Promise<T> {
   return p
 }
 
+// Daemon process start time, stamped once at boot. Returned to every
+// register handshake so shims can detect a daemon restart by comparing
+// against their cached value (see shim's NOTIFY_DAEMON emission).
+const STARTED_AT = new Date().toISOString()
+
 const ctx: HandlerCtx = {
   storage,
   router,
-  daemon: { version: VERSION },
+  daemon: { version: VERSION, startedAt: STARTED_AT },
   nowIso: () => new Date().toISOString(),
 }
 
@@ -196,6 +202,19 @@ async function shutdown(signal: string): Promise<void> {
   }
   shuttingDown = true
   process.stderr.write(`[choros-daemon] ${signal} received, stopping\n`)
+  // Tell every live peer we're going away before the sockets close, so
+  // each CC can frame the imminent disconnect + reconnect burst rather
+  // than treat it as four sessions silently churning.
+  try {
+    broadcastDaemonLifecycle(
+      ctx,
+      'shutting_down',
+      `choros daemon stopping (${signal}); peers will reconnect when it restarts`,
+    )
+  } catch (e: unknown) {
+    const m = e instanceof Error ? e.message : String(e)
+    process.stderr.write(`[choros-daemon] shutdown lifecycle broadcast failed: ${m}\n`)
+  }
   const hardExitTimer = setTimeout(() => {
     process.stderr.write(
       `[choros-daemon] shutdown wedged past ${SHUTDOWN_DEADLINE_MS}ms — hard exit\n`,

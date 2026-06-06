@@ -18,9 +18,13 @@ import {
 } from '#choros/protocol/methods.ts'
 
 /** Daemon-side build metadata returned in the register handshake. The
- *  shim doesn't depend on it for correctness — it's purely diagnostic. */
+ *  shim doesn't depend on `version` for correctness — it's purely
+ *  diagnostic. `startedAt` is load-bearing: shims compare it across
+ *  registers to detect a daemon restart and surface that lifecycle
+ *  transition to their CC. */
 export interface DaemonIdentity {
   version: string
+  startedAt: string
 }
 
 /** Handler context — what every RPC method needs. */
@@ -134,6 +138,7 @@ export function handleRegister(
 
   return {
     daemon_version: ctx.daemon.version,
+    daemon_started_at: ctx.daemon.startedAt,
     protocol_version: PROTOCOL_VERSION,
     pending,
     roster,
