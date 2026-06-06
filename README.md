@@ -40,6 +40,10 @@ goes through `choros.<tool>` on the daemon, with the session's
 the same connection. Codex uses a split adapter: MCP is tool-only, while
 `choros-codex attach` owns app-server delivery for a Codex thread.
 
+For the identity, display-name resolution, and routing model — the parts
+of the system most likely to surprise under restart, rename, and
+concurrency — see [`docs/identity-and-routing.md`](docs/identity-and-routing.md).
+
 ## Quick start
 
 ```bash
