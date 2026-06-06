@@ -181,6 +181,35 @@ export function clearSessionLock(storage: Storage, sessionId: string): void {
     .run(sessionId)
 }
 
+/** Clear `lock_pid` on every session whose heartbeat hasn't landed
+ *  since `cutoffIso`. Targets sessions whose shim died without
+ *  deregistering — leaving a stale `lock_pid` that would otherwise
+ *  make them look "live" to the by-name resolver (tier 2 filters on
+ *  `lock_pid IS NOT NULL`, AND heartbeat freshness — so cleaning
+ *  the lock_pid is belt-and-braces alignment with the freshness
+ *  gate). Row history (display_name, agent_status, message FKs) is
+ *  preserved. Returns the number of rows cleared. */
+export function clearStaleLocks(storage: Storage, cutoffIso: string): number {
+  const result = storage.db
+    .query(
+      `UPDATE sessions SET lock_pid = NULL, lock_started_at = NULL
+       WHERE lock_pid IS NOT NULL AND (heartbeat_at IS NULL OR heartbeat_at < ?)`,
+    )
+    .run(cutoffIso)
+  return result.changes
+}
+
+/** Snapshot of every session still holding a `lock_pid`. Caller
+ *  iterates and checks OS-level liveness — any PID that's no longer
+ *  alive gets its lock_pid cleared via {@link clearSessionLock}.
+ *  Pure read so storage stays decoupled from the platform PID API. */
+export function listLockedSessions(storage: Storage): { id: string; lock_pid: number }[] {
+  return storage.db.query('SELECT id, lock_pid FROM sessions WHERE lock_pid IS NOT NULL').all() as {
+    id: string
+    lock_pid: number
+  }[]
+}
+
 /** Update heartbeat + ambient state from a periodic shim heartbeat.
  *  Conditional on the session still having an active lock — a
  *  heartbeat arriving after deregister (e.g. the shim's heartbeat

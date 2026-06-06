@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  clearSessionLock,
+  clearStaleLocks,
+  listLockedSessions,
+  openStorage,
+  upsertSession,
+} from '#choros/daemon/storage.ts'
+import {
   ERR_METHOD_NOT_FOUND,
   ERR_PROTOCOL_MISMATCH,
   PROTOCOL_VERSION,
@@ -180,6 +187,83 @@ describe('daemon foundation (Phase 1)', () => {
       await client.close()
     } finally {
       await daemon.stop()
+    }
+  })
+
+  test('clearStaleLocks clears rows past the heartbeat cutoff', () => {
+    const storage = openStorage(':memory:')
+    try {
+      // Three sessions: fresh, stale, and never-heartbeated.
+      upsertSession(storage, {
+        id: 'aaaaaaaa-0000-0000-0000-000000000001',
+        display_name: 'fresh',
+        host: 'h',
+        cwd: '/c',
+        pid: 1001,
+        nowIso: '2026-06-06T10:00:00.000Z',
+      })
+      upsertSession(storage, {
+        id: 'aaaaaaaa-0000-0000-0000-000000000002',
+        display_name: 'stale',
+        host: 'h',
+        cwd: '/c',
+        pid: 1002,
+        nowIso: '2026-06-06T08:00:00.000Z',
+      })
+      // never-heartbeated: insert and manually NULL heartbeat_at.
+      upsertSession(storage, {
+        id: 'aaaaaaaa-0000-0000-0000-000000000003',
+        display_name: 'orphan',
+        host: 'h',
+        cwd: '/c',
+        pid: 1003,
+        nowIso: '2026-06-06T10:00:00.000Z',
+      })
+      storage.db
+        .query('UPDATE sessions SET heartbeat_at = NULL WHERE id = ?')
+        .run('aaaaaaaa-0000-0000-0000-000000000003')
+
+      // Cutoff = 09:00 — should clear stale + orphan, leave fresh.
+      const cleared = clearStaleLocks(storage, '2026-06-06T09:00:00.000Z')
+      expect(cleared).toBe(2)
+
+      const rows = storage.db.query('SELECT id, lock_pid FROM sessions ORDER BY id').all() as {
+        id: string
+        lock_pid: number | null
+      }[]
+      expect(rows[0]?.lock_pid).toBe(1001) // fresh kept
+      expect(rows[1]?.lock_pid).toBeNull() // stale cleared
+      expect(rows[2]?.lock_pid).toBeNull() // orphan cleared
+    } finally {
+      storage.close()
+    }
+  })
+
+  test('listLockedSessions returns only sessions with lock_pid set', () => {
+    const storage = openStorage(':memory:')
+    try {
+      upsertSession(storage, {
+        id: 'bbbbbbbb-0000-0000-0000-000000000001',
+        display_name: 'locked',
+        host: 'h',
+        cwd: '/c',
+        pid: 2001,
+        nowIso: '2026-06-06T10:00:00.000Z',
+      })
+      upsertSession(storage, {
+        id: 'bbbbbbbb-0000-0000-0000-000000000002',
+        display_name: 'unlocked',
+        host: 'h',
+        cwd: '/c',
+        pid: 2002,
+        nowIso: '2026-06-06T10:00:00.000Z',
+      })
+      clearSessionLock(storage, 'bbbbbbbb-0000-0000-0000-000000000002')
+      const locked = listLockedSessions(storage)
+      expect(locked).toHaveLength(1)
+      expect(locked[0]?.lock_pid).toBe(2001)
+    } finally {
+      storage.close()
     }
   })
 })

@@ -22,12 +22,18 @@
  */
 import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { DEAD_AGE_MS } from '#choros/constants.ts'
 import { startAdminServer } from '#choros/daemon/admin.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { broadcastDaemonLifecycle } from '#choros/daemon/notify.ts'
 import { startRpcServer } from '#choros/daemon/rpc.ts'
 import { SessionRouter } from '#choros/daemon/sessions.ts'
-import { openStorage } from '#choros/daemon/storage.ts'
+import {
+  clearSessionLock,
+  clearStaleLocks,
+  listLockedSessions,
+  openStorage,
+} from '#choros/daemon/storage.ts'
 import {
   adminSocketPath,
   daemonSocketPath,
@@ -180,6 +186,42 @@ const admin = startAdminServer({
 })
 
 void trackHandler // reserved for Phase 2+ async handler dispatch
+
+/** Reconcile session-table locks with reality. Two passes:
+ *
+ *  1. Stale-heartbeat sweep: any row whose `lock_pid` is set but whose
+ *     `heartbeat_at` is older than `DEAD_AGE_MS` (10 min) had its shim
+ *     die without deregistering — almost always a daemon crash or
+ *     `kill -9` on the shim. Clear the lock.
+ *
+ *  2. Dead-PID sweep: any row whose `lock_pid` points at a PID that
+ *     isn't currently running. Catches shims that died very recently
+ *     (before the heartbeat-age threshold trips) and shims orphaned
+ *     across a daemon restart where the PID was recycled.
+ *
+ *  Row history (display_name, agent_status, message FKs) is preserved;
+ *  only the lock columns get cleared. Runs at boot AND on a periodic
+ *  timer so a long-running daemon also cleans up after itself. */
+function reconcileSessionLocks(): void {
+  const cutoff = new Date(Date.now() - DEAD_AGE_MS).toISOString()
+  const staleCleared = clearStaleLocks(storage, cutoff)
+  let deadCleared = 0
+  for (const row of listLockedSessions(storage)) {
+    if (!isPidAlive(row.lock_pid)) {
+      clearSessionLock(storage, row.id)
+      deadCleared++
+    }
+  }
+  if (staleCleared > 0 || deadCleared > 0) {
+    process.stderr.write(
+      `[choros-daemon] reconcile: cleared ${staleCleared} stale-heartbeat lock(s), ${deadCleared} dead-PID lock(s)\n`,
+    )
+  }
+}
+
+reconcileSessionLocks()
+const reconcileTimer = setInterval(reconcileSessionLocks, DEAD_AGE_MS)
+reconcileTimer.unref()
 
 process.stderr.write(
   `[choros-daemon] v${VERSION} listening on rpc=${SOCKET_PATH} admin=${ADMIN_SOCKET_PATH} db=${DB_PATH}\n`,
