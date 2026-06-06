@@ -58,6 +58,10 @@ export interface Clock {
  */
 export interface Proc {
   pid(): number
+  /** Parent PID. Used by the shim to locate Claude Code's per-process
+   *  session metadata at `~/.claude/sessions/<ppid>.json` — the
+   *  canonical source for this CC session's UUID + display name. */
+  ppid(): number
   cwd(): string
   pidAlive(pid: number): Promise<boolean>
   exit(code: number): never
@@ -215,6 +219,7 @@ function realProc(): Proc {
   }
   return {
     pid: () => process.pid,
+    ppid: () => process.ppid ?? 0,
     cwd: () => process.cwd(),
     async pidAlive(pid) {
       if (!pid || typeof pid !== 'number') return false

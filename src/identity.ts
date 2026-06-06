@@ -55,6 +55,7 @@ export interface Identity {
   meIsUuid: boolean
   source:
     | 'CHOROS_IDENTITY'
+    | 'cc-session-file'
     | 'CLAUDE_CODE_SESSION_ID'
     | 'newest-jsonl-in-project-dir'
     | 'CLAUDE_PROJECT_DIR'

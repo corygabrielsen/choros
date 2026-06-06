@@ -29,6 +29,7 @@ import {
   type RegisterResult,
 } from '#choros/protocol/methods.ts'
 import { NOTIFY_ROSTER } from '#choros/protocol/notifications.ts'
+import { readCcSessionFile, readCcSessionFileWithRetry } from '#choros/shim/cc-session-file.ts'
 import {
   JSONL_VERIFY_TIMEOUT_MS,
   jsonlSize,
@@ -55,17 +56,35 @@ const ctx = realContext({
   },
 })
 
-const identity = await resolveIdentity(ctx, projectsRoot(ctx))
+// CC's `~/.claude/sessions/<ppid>.json` carries the authoritative
+// sessionId + display name. Try it first (with bounded retry to ride
+// out CC's startup-write race). Fall back to the legacy heuristic
+// chain when running outside CC (test, debug, headless / sdk-cli on
+// older CC versions that don't write this file).
+const HOME = ctx.env.homedir()
+const ccSession = await readCcSessionFileWithRetry(HOME, ctx.proc.ppid())
+const identity =
+  ccSession === null
+    ? await resolveIdentity(ctx, projectsRoot(ctx))
+    : { me: ccSession.sessionId, meIsUuid: true, source: 'cc-session-file' as const }
 const ME = identity.me
 const DAEMON_SOCK = daemonSocketPath()
 const PROJECTS_ROOT = projectsRoot(ctx)
+const CC_PPID = ctx.proc.ppid()
 
 function currentDisplayName(): Promise<string | null> {
   if (!identity.meIsUuid) return Promise.resolve(identity.me)
-  return resolveDisplayName({
-    sessionId: ME,
-    projectsRoot: PROJECTS_ROOT,
-    pwd: ctx.env.get('PWD') || ctx.proc.cwd(),
+  // CC's per-process session file is the canonical source of the
+  // display name — covers `/rename`, `--continue`, `--resume "X"`,
+  // and any session length. JSONL tail-scan stays as fallback for
+  // sdk-cli (file present, name null) and non-CC parents (no file).
+  return readCcSessionFile(HOME, CC_PPID).then(cc => {
+    if (cc?.name) return cc.name
+    return resolveDisplayName({
+      sessionId: ME,
+      projectsRoot: PROJECTS_ROOT,
+      pwd: ctx.env.get('PWD') || ctx.proc.cwd(),
+    })
   })
 }
 

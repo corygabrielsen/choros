@@ -194,12 +194,19 @@ export class FakeProc implements Proc {
   stderrLines: string[] = []
   private alivePids = new Set<number>([1000])
 
-  constructor(public myPid = 1000) {
+  constructor(
+    public myPid = 1000,
+    public myPpid = 999,
+  ) {
     this.alivePids.add(myPid)
   }
 
   pid(): number {
     return this.myPid
+  }
+
+  ppid(): number {
+    return this.myPpid
   }
 
   cwd(): string {
