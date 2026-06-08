@@ -1,28 +1,31 @@
 /**
- * Session-renewal coalescing.
+ * Session-renewal recognition.
  *
- * Coalesces a (leave, join, name_evicted, rename) sequence into a single
- * `session_renewed` event when a CC `/exit`-then-relaunch reclaims the
- * same display name within RENEWAL_WINDOW_MS. Atomic events remain the
- * protocol's primitives; this module is the deferred-publication layer
- * that emits the composite witness when the sequence completes.
+ * Emits atomic presence events (leave/join/rename) immediately, then
+ * recognizes the renewal pattern at the moment a same-name claim
+ * arrives and emits a `session_renewed` witness event. The witness
+ * carries the old session id so consumers can correlate it with the
+ * preceding `leave` and render the (leave, session_renewed) pair as
+ * a single identity transition.
  *
  * # Invariants
  *
+ * - **No deferral**: every atomic event fires synchronously at the
+ *   moment of its trigger. The daemon never holds an event waiting
+ *   for context. Fast exits, fast joins.
+ * - **Recognition, not replacement**: `session_renewed` is an
+ *   *additional* event, not a substitute. The preceding `leave`
+ *   still fires; the witness frames it retroactively.
+ * - **Bounded memory**: vacated names age out of the cache after
+ *   `vacatedTtlMs`. A claim that arrives later than that gets the
+ *   normal LWW/rename path with no renewal recognition.
+ * - **At most one entry per name**: when the same name is vacated
+ *   twice in quick succession (rare; the DB's unique constraint on
+ *   `display_name` normally prevents this), the second entry
+ *   replaces the first — the most recent vacator wins the renewal
+ *   matchup.
  * - **Single-threaded (Bun event loop)**: every transition runs to
- *   completion before any timer callback executes. No SQL or socket
- *   work happens between the state read and the state mutation, so
- *   the maps and the broadcasts stay consistent without locks.
- * - **At most one pending entry per key**: each session_id has at most
- *   one `Pending` join; each display_name has at most one
- *   `PendingLeave`. The DB's unique constraint on `display_name`
- *   structurally enforces the latter.
- * - **Timer cancellation is the only abort path**: a pending entry
- *   exits state only via `flush*` (callback or external) or via
- *   `cancel*`. No silent expiry.
- * - **Shutdown drops, does not flush**: deferred broadcasts are
- *   transient; on daemon shutdown they vanish and clients reconcile
- *   via roster on reconnect.
+ *   completion before any timer callback executes. No locks needed.
  */
 
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
@@ -30,8 +33,7 @@ import { broadcastPresence } from '#choros/daemon/notify.ts'
 import { NOTIFY_PRESENCE } from '#choros/protocol/notifications.ts'
 
 /** Timer abstraction so tests inject a FakeClock and avoid wall-clock
- *  flakiness. Real implementation wraps Node's setTimeout/clearTimeout
- *  via an opaque handle so callers don't see the platform difference. */
+ *  flakiness. */
 export interface Clock {
   setTimeout(cb: () => void, ms: number): TimerHandle
   clearTimeout(handle: TimerHandle): void
@@ -48,175 +50,85 @@ export const realClock: Clock = {
   },
 }
 
-interface PendingJoin {
-  sessionId: string
-  displayName: string | null
-  timer: TimerHandle
-}
-
-interface PendingLeave {
+interface VacatedEntry {
   sessionId: string
   displayName: string
-  timer: TimerHandle
+  evictTimer: TimerHandle
 }
 
-/** Per-daemon coalescing state. Owns the two pending maps and decides
- *  whether each transition flushes or suppresses the underlying
- *  broadcast. Tests drive it directly via a FakeClock; production wires
- *  it via the daemon's HandlerCtx. */
+/** Recognizes session renewals at claim-time. Maintains a TTL'd map
+ *  of recently-vacated display names; on a same-name claim within
+ *  the TTL, emits a `session_renewed` witness event and tells the
+ *  caller to suppress the would-be `name_evicted` + `rename` pair.
+ *
+ *  No deferral of atomic events: leave fires immediately on
+ *  deregister, join fires immediately on register. The renewal
+ *  pattern is recognized retroactively when the claim arrives. */
 export class RenewalCoordinator {
-  private pendingJoins = new Map<string, PendingJoin>()
-  private pendingLeaves = new Map<string, PendingLeave>()
+  private vacated = new Map<string, VacatedEntry>()
 
   constructor(
     private readonly clock: Clock,
-    private readonly claimWindowMs: number,
-    private readonly renewalWindowMs: number,
+    private readonly vacatedTtlMs: number,
   ) {}
 
-  /** Called by the register handler. Defers `join(sessionId)`; if a
-   *  matching `set_display_name` arrives before the timer fires, the
-   *  join either turns into a `session_renewed` or flushes normally
-   *  alongside `rename`. Idempotent: a second register for the same
-   *  session_id replaces the prior pending join's timer. */
-  enterPendingJoin(ctx: HandlerCtx, sessionId: string, displayName: string | null): void {
-    // Zero-window short-circuit: don't schedule a timer; broadcast
-    // synchronously. Restores observable equivalence with the pre-
-    // renewal daemon for tests that opt out of coalescing, and
-    // sidesteps the setTimeout(0) race between handler return and
-    // timer callback that would otherwise leave the broadcast in
-    // limbo for one event loop tick.
-    if (this.claimWindowMs === 0) {
-      broadcastPresence(ctx, 'join', sessionId, displayName)
-      return
-    }
-    const prior = this.pendingJoins.get(sessionId)
+  /** Called by the deregister handler. Fires `leave` immediately
+   *  (no waiting), then records the (name, session) pair in the
+   *  vacated cache so a same-name claim arriving within
+   *  `vacatedTtlMs` can be recognized as a renewal. Unnamed
+   *  disconnects only fire `leave`; there's nothing to record. */
+  recordLeave(ctx: HandlerCtx, sessionId: string, displayName: string | null): void {
+    broadcastPresence(ctx, 'leave', sessionId, displayName)
+    if (displayName === null) return
+    const prior = this.vacated.get(displayName)
     if (prior !== undefined) {
-      this.clock.clearTimeout(prior.timer)
+      // Replace: the most recent vacator wins. The prior entry's
+      // potential renewer (if any) missed its window; the new
+      // entry takes over the slot.
+      this.clock.clearTimeout(prior.evictTimer)
     }
-    const timer = this.clock.setTimeout(() => {
-      this.pendingJoins.delete(sessionId)
-      broadcastPresence(ctx, 'join', sessionId, displayName)
-    }, this.claimWindowMs)
-    this.pendingJoins.set(sessionId, { sessionId, displayName, timer })
+    const evictTimer = this.clock.setTimeout(() => {
+      this.vacated.delete(displayName)
+    }, this.vacatedTtlMs)
+    this.vacated.set(displayName, { sessionId, displayName, evictTimer })
   }
 
-  /** Called by the deregister handler. Defers `leave(sessionId, name)`
-   *  when the session held a display name; if a matching
-   *  `set_display_name(name, _)` arrives before the timer fires the
-   *  pair is coalesced into `session_renewed`. Unnamed disconnects
-   *  bypass this and fire `leave` immediately (no renewal can apply).
-   */
-  enterPendingLeave(ctx: HandlerCtx, sessionId: string, displayName: string | null): void {
-    if (displayName === null) {
-      broadcastPresence(ctx, 'leave', sessionId, null)
-      return
-    }
-    if (this.renewalWindowMs === 0) {
-      // Zero-window short-circuit (see enterPendingJoin).
-      broadcastPresence(ctx, 'leave', sessionId, displayName)
-      return
-    }
-    const prior = this.pendingLeaves.get(displayName)
-    if (prior !== undefined) {
-      // Replace: an older pending-leave for the same name (e.g. two
-      // sessions held the name in close succession) flushes
-      // immediately before the new one enters its window. The DB's
-      // unique constraint normally prevents this, but a stale cached
-      // displayName can still collide; flushing keeps the visible
-      // sequence linear.
-      this.clock.clearTimeout(prior.timer)
-      broadcastPresence(ctx, 'leave', prior.sessionId, prior.displayName)
-    }
-    const timer = this.clock.setTimeout(() => {
-      this.pendingLeaves.delete(displayName)
-      broadcastPresence(ctx, 'leave', sessionId, displayName)
-    }, this.renewalWindowMs)
-    this.pendingLeaves.set(displayName, { sessionId, displayName, timer })
+  /** Called by the set_display_name handler before its eviction +
+   *  rename broadcasts. If `name` is in the vacated cache, removes
+   *  it and returns `{ kind: 'renewed', oldSessionId }` so the
+   *  caller can emit `session_renewed` and SKIP `name_evicted` +
+   *  `rename`. Otherwise returns `{ kind: 'normal' }` and the caller
+   *  proceeds with the standard LWW path. */
+  tryRecognizeRenewal(name: string): RecognitionOutcome {
+    const entry = this.vacated.get(name)
+    if (entry === undefined) return { kind: 'normal' }
+    this.clock.clearTimeout(entry.evictTimer)
+    this.vacated.delete(name)
+    return { kind: 'renewed', oldSessionId: entry.sessionId }
   }
 
-  /** Called by the set_display_name handler with the claiming session
-   *  and the requested name. Returns:
-   *   - `{ kind: 'renewed', oldSessionId }` if a pending-leave exists
-   *     for `name` (the caller broadcasts `session_renewed` and SKIPS
-   *     broadcasting join / name_evicted / rename for the pair).
-   *   - `{ kind: 'normal' }` otherwise — the caller falls through to
-   *     the existing LWW/rename broadcast path AND should call
-   *     `flushPendingJoinIfAny` before broadcasting join.
-   *
-   *  Note: the claimant's `Pending` vs `Joined` state is NOT required
-   *  for renewal. Empirically, the new shim's set_display_name often
-   *  arrives AFTER its own pending-join timer expires (CC startup +
-   *  shim backfill latency vs. CLAIM_WINDOW_MS). Gating on pendingJoin
-   *  would miss the common case. A Joined session voluntarily renaming
-   *  to a recently-vacated name also fires `session_renewed`; this is
-   *  observably correct (the name's owner just changed via a
-   *  deregister+claim cycle) and a rare-enough false positive that
-   *  the simpler predicate wins. */
-  tryRenewal(name: string, claimingSessionId: string): RenewalOutcome {
-    const pendingLeave = this.pendingLeaves.get(name)
-    if (pendingLeave === undefined) return { kind: 'normal' }
-    this.clock.clearTimeout(pendingLeave.timer)
-    this.pendingLeaves.delete(name)
-    const pendingJoin = this.pendingJoins.get(claimingSessionId)
-    if (pendingJoin !== undefined) {
-      this.clock.clearTimeout(pendingJoin.timer)
-      this.pendingJoins.delete(claimingSessionId)
-    }
-    return { kind: 'renewed', oldSessionId: pendingLeave.sessionId }
-  }
-
-  /** Called by the set_display_name handler on the normal (non-renewal)
-   *  path before it broadcasts rename. Flushes any deferred join for
-   *  this session so live peers see `join` before `rename` rather than
-   *  `rename` for an unannounced session. Returns true if a join was
-   *  flushed (the caller's broadcastPresence('join') would be a dup). */
-  flushPendingJoinIfAny(ctx: HandlerCtx, sessionId: string): boolean {
-    const pending = this.pendingJoins.get(sessionId)
-    if (pending === undefined) return false
-    this.clock.clearTimeout(pending.timer)
-    this.pendingJoins.delete(sessionId)
-    broadcastPresence(ctx, 'join', sessionId, pending.displayName)
-    return true
-  }
-
-  /** Called by the deregister handler before entering PendingLeave, in
-   *  case the session disconnects while still in `Pending` (joined-
-   *  in-name-only, never confirmed). Discards the deferred join
-   *  silently — the session came and went without ever being visible. */
-  cancelPendingJoin(sessionId: string): boolean {
-    const pending = this.pendingJoins.get(sessionId)
-    if (pending === undefined) return false
-    this.clock.clearTimeout(pending.timer)
-    this.pendingJoins.delete(sessionId)
-    return true
-  }
-
-  /** Drop every pending timer without flushing. Called by the daemon's
-   *  shutdown path: deferred broadcasts are transient and clients
-   *  reconcile on reconnect; firing them post-shutdown would race the
-   *  socket close. */
+  /** Drop every TTL timer without flushing. Called by the daemon's
+   *  shutdown path; the in-memory cache is transient and clients
+   *  reconcile via roster on reconnect. */
   shutdown(): void {
-    for (const p of this.pendingJoins.values()) this.clock.clearTimeout(p.timer)
-    for (const p of this.pendingLeaves.values()) this.clock.clearTimeout(p.timer)
-    this.pendingJoins.clear()
-    this.pendingLeaves.clear()
+    for (const e of this.vacated.values()) this.clock.clearTimeout(e.evictTimer)
+    this.vacated.clear()
   }
 
   /** Diagnostic snapshot for tests + doctor probes. */
-  pendingCounts(): { joins: number; leaves: number } {
-    return { joins: this.pendingJoins.size, leaves: this.pendingLeaves.size }
+  vacatedCount(): number {
+    return this.vacated.size
   }
 }
 
-export type RenewalOutcome = { kind: 'renewed'; oldSessionId: string } | { kind: 'normal' }
+export type RecognitionOutcome = { kind: 'renewed'; oldSessionId: string } | { kind: 'normal' }
 
-/** Broadcast a `session_renewed` event — the composite witness for a
- *  coalesced (leave, join, name_evicted, rename) sequence. Uses the
- *  same NOTIFY_PRESENCE channel as the atomic events with a distinct
- *  `event` value so consumers can filter on it. Skips the renewer
- *  itself (its prior identity is gone) AND the new claimant (it
- *  already knows it just claimed the name). */
+/** Broadcast a `session_renewed` event — the witness for a renewal
+ *  pattern recognized at claim-time. Frames the immediately-prior
+ *  `leave(old)` as the departure half of an identity transition.
+ *  Uses the NOTIFY_PRESENCE channel with a distinct `event` value.
+ *  Skips the renewer itself (old session is gone) AND the claimant
+ *  (it already knows it just claimed the name). */
 export function broadcastSessionRenewed(
   ctx: HandlerCtx,
   oldSessionId: string,

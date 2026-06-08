@@ -74,9 +74,16 @@ export function evictDisplayNameHolders(
        WHERE display_name = ? COLLATE NOCASE AND id != ?`,
     )
     .run(name, claimingSessionId)
+  // Only broadcast name_evicted for LIVE prior holders. A row whose
+  // session deregistered (or whose socket dropped) is a ghost — the
+  // `leave` for that session already fired, and a redundant
+  // name_evicted broadcasts noise that observers can't act on. The
+  // DB clean-up still runs for ghosts; only the wire signal is
+  // gated on liveness.
+  const liveSet = new Set(ctx.router.connectedSessionIds())
   for (const e of evicted) {
     ctx.router.setDisplayName(e.id, null)
-    if (!opts.suppressBroadcast) {
+    if (!opts.suppressBroadcast && liveSet.has(e.id)) {
       broadcastNameEviction(ctx, e.id, name, claimingSessionId)
     }
   }

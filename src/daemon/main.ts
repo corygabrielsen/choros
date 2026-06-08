@@ -22,7 +22,7 @@
  */
 import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { CLAIM_WINDOW_MS, DEAD_AGE_MS, RENEWAL_WINDOW_MS } from '#choros/constants.ts'
+import { DEAD_AGE_MS, VACATED_TTL_MS } from '#choros/constants.ts'
 import { startAdminServer } from '#choros/daemon/admin.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { broadcastDaemonLifecycle } from '#choros/daemon/notify.ts'
@@ -172,7 +172,7 @@ function trackHandler<T>(p: Promise<T>): Promise<T> {
 // against their cached value (see shim's NOTIFY_DAEMON emission).
 const STARTED_AT = new Date().toISOString()
 
-const renewal = new RenewalCoordinator(realClock, CLAIM_WINDOW_MS, RENEWAL_WINDOW_MS)
+const renewal = new RenewalCoordinator(realClock, VACATED_TTL_MS)
 
 const ctx: HandlerCtx = {
   storage,

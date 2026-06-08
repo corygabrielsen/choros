@@ -7,18 +7,13 @@ export const LIVE_MAX_AGE_MS = 90_000
  *  regardless of pid-alive state. */
 export const DEAD_AGE_MS = 600_000
 
-/** Window during which a deregistered session's leave broadcast is held,
- *  awaiting a same-name claim that would coalesce it into a single
- *  `session_renewed` event. Sized to cover empirical CC `/exit` +
- *  relaunch latency: new shim register at ~3-5 s post-deregister, then
- *  set_display_name backfill at ~6-8 s. 15 s is the smallest window
- *  that holds the leave past the typical claim arrival; below it, the
- *  deferred leave fires first and the renewal path no longer applies. */
-export const RENEWAL_WINDOW_MS = 15_000
-
-/** Window during which a freshly-registered session's join broadcast is
- *  held, in case a `set_display_name` call within the window completes a
- *  renewal. Empirically the shim takes ~2-3 s from register to first
- *  set_display_name; 5 s buys headroom on slow hardware without
- *  meaningfully delaying genuinely-anonymous joins. */
-export const CLAIM_WINDOW_MS = 5_000
+/** TTL on the renewal coordinator's vacated-names cache. When a session
+ *  with display_name=X deregisters, X enters the cache and stays for
+ *  this long. A same-name claim arriving within the TTL is recognized
+ *  as a renewal and emits a `session_renewed` witness event; arrivals
+ *  later than the TTL fall through to the standard LWW/rename path.
+ *  60 s is long enough to cover slow CC restarts (shell init, login
+ *  hooks, manual relaunch delay) without holding the cache so long
+ *  that a deliberate-leave-then-different-session-takes-the-name
+ *  cross-talk window opens. */
+export const VACATED_TTL_MS = 60_000

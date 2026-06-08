@@ -33,14 +33,12 @@ export function handleDeregister(ctx: HandlerCtx, rawArgs: unknown): DeregisterR
   const parsed = validateDeregisterArgs(rawArgs)
   if ('code' in parsed) return parsed
   const displayName = ctx.router.displayNameFor(parsed.session_id) ?? null
-  // Flush any still-pending join in front of the leave so the
-  // observable sequence is `join → leave` for a came-and-went session
-  // rather than just `leave` for an unannounced one. The renewal
-  // path can still coalesce a subsequent same-name claim; flushing
-  // join here doesn't preempt that — it only affects the timing of
-  // the broadcast for this session's own join.
-  ctx.renewal.flushPendingJoinIfAny(ctx, parsed.session_id)
-  ctx.renewal.enterPendingLeave(ctx, parsed.session_id, displayName)
+  // Fire leave immediately and record the (name, session) pair in the
+  // renewal coordinator's vacated cache. A same-name claim arriving
+  // within VACATED_TTL_MS will be recognized as a renewal and emit a
+  // `session_renewed` witness that retroactively frames this leave
+  // as the departure half of an identity transition.
+  ctx.renewal.recordLeave(ctx, parsed.session_id, displayName)
   clearSessionLock(ctx.storage, parsed.session_id)
   ctx.router.unbindBySession(parsed.session_id)
   return { acknowledged: true }

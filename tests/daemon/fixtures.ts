@@ -30,27 +30,19 @@ export interface TestDaemon {
  *  assertions that require WAL-on-disk behavior. */
 export function spawnTestDaemon(opts?: {
   nowIso?: () => string
-  /** Override the join-deferral window. The test fixture defaults to
-   *  0 (`join` fires synchronously, same observable as the pre-
-   *  renewal daemon) so existing tests pass without modification.
-   *  Renewal-specific tests opt into the windowed behavior by passing
-   *  the production CLAIM_WINDOW_MS or an explicit small value with a
-   *  matching `setTimeout(0)` flush. */
-  claimWindowMs?: number
-  /** Override the leave-deferral window. Defaults to 0 (same as
-   *  pre-renewal daemon). Renewal-specific tests opt in. */
-  renewalWindowMs?: number
+  /** Override the vacated-names TTL on the renewal coordinator.
+   *  Defaults to 0 — vacated names age out instantly, so the
+   *  recognition path never fires and existing tests observe the
+   *  pre-renewal LWW/rename behavior. Renewal-specific tests opt in
+   *  by passing a non-zero TTL. */
+  vacatedTtlMs?: number
 }): TestDaemon {
   const stateRoot = mkdtempSync(join(tmpdir(), 'choros-test-'))
   const socketPath = join(stateRoot, 'daemon.sock')
   const adminSocketPath = join(stateRoot, 'admin.sock')
   const storage = openStorage(':memory:')
   const router = new SessionRouter()
-  const renewal = new RenewalCoordinator(
-    realClock,
-    opts?.claimWindowMs ?? 0,
-    opts?.renewalWindowMs ?? 0,
-  )
+  const renewal = new RenewalCoordinator(realClock, opts?.vacatedTtlMs ?? 0)
   const ctx: HandlerCtx = {
     storage,
     router,

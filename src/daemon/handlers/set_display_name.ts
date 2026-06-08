@@ -37,20 +37,20 @@ export function handleSetDisplayName(
   const cached = ctx.router.displayNameFor(session_id)
   const previous = cached === undefined ? null : cached
 
-  // Renewal check: a freshly-registered session (`Pending` join)
-  // claiming a recently-vacated name (`PendingLeave`) collapses the
-  // (leave, join, name_evicted, rename) sequence into one
-  // `session_renewed` event. Only attempted on a non-null claim; a
-  // session clearing its own name is never a renewal.
+  // Renewal recognition: if the claimed name is in the vacated cache
+  // (its prior holder deregistered within VACATED_TTL_MS), emit a
+  // single `session_renewed` witness and suppress the standard
+  // name_evicted + rename pair. The atomic `leave(prior_session)`
+  // already fired at deregister time; the witness retroactively
+  // frames it as the departure half of an identity transition.
   const renewal =
-    value === null ? { kind: 'normal' as const } : ctx.renewal.tryRenewal(value, session_id)
+    value === null ? { kind: 'normal' as const } : ctx.renewal.tryRecognizeRenewal(value)
 
-  // Claim the name from any prior holder before writing it to this
-  // session. On the renewal path the eviction still runs (clearing
-  // the old row's display_name in the DB) but its name_evicted
-  // broadcast is suppressed — the session_renewed event that fires
-  // below is the composite witness that already conveys the
-  // ownership transfer.
+  // Claim the name from any prior LIVE holder. On the renewal path
+  // the prior holder already deregistered; if its row still carries
+  // the display_name in the DB (deregister preserves history rows),
+  // the eviction clears it without broadcasting — the
+  // session_renewed witness conveys the ownership transfer.
   if (value !== null) {
     evictDisplayNameHolders(ctx, value, session_id, {
       suppressBroadcast: renewal.kind === 'renewed',
@@ -69,20 +69,16 @@ export function handleSetDisplayName(
   ctx.router.setDisplayName(session_id, value)
 
   if (renewal.kind === 'renewed' && value !== null) {
-    // Coalesced path: one event in place of leave + join + name_evicted
-    // + rename. The eviction above ran with broadcast suppressed; the
-    // pending join + pending leave were cancelled inside tryRenewal.
-    // session_renewed is the composite witness consumers see.
+    // Witness path: one session_renewed event in place of name_evicted
+    // + rename. The preceding `leave(prior_session)` fired
+    // immediately at deregister time; the witness frames the pair.
     broadcastSessionRenewed(ctx, renewal.oldSessionId, session_id, value)
-  } else {
-    // Normal path: flush any deferred join for this session so live
-    // peers see `join` before `rename` (correct causal order) rather
-    // than `rename` for an unannounced session. Then broadcast rename
-    // if the value actually changed.
-    ctx.renewal.flushPendingJoinIfAny(ctx, session_id)
-    if (previous !== value) {
-      broadcastPresence(ctx, 'rename', session_id, value, previous)
-    }
+  } else if (previous !== value) {
+    // Standard path: announce the rename so live peers update without
+    // waiting for a doctor, the renamer's next message, or a
+    // leave/join cycle. Push-only; skip no-op writes that didn't
+    // actually change the name.
+    broadcastPresence(ctx, 'rename', session_id, value, previous)
   }
   return { display_name: value }
 }

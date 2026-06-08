@@ -1,7 +1,7 @@
 import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
 import { DISPLAY_NAME_MAX_BYTES, nowMsFromCtx } from '#choros/daemon/helpers.ts'
-import { evictDisplayNameHolders } from '#choros/daemon/notify.ts'
-import type { RenewalCoordinator } from '#choros/daemon/renewal.ts'
+import { broadcastPresence, evictDisplayNameHolders } from '#choros/daemon/notify.ts'
+import { broadcastSessionRenewed, type RenewalCoordinator } from '#choros/daemon/renewal.ts'
 import type { NotificationSink, SessionRouter } from '#choros/daemon/sessions.ts'
 import type { Storage } from '#choros/daemon/storage.ts'
 import {
@@ -33,12 +33,13 @@ export interface HandlerCtx {
   storage: Storage
   router: SessionRouter
   daemon: DaemonIdentity
-  /** Coalescing layer for the (leave, join, name_evicted, rename)
-   *  sequence emitted on CC `/exit`-then-relaunch. Handlers route
-   *  their presence broadcasts through it instead of calling
-   *  `broadcastPresence` directly so a same-name reclaim within the
-   *  renewal window produces one `session_renewed` event in place of
-   *  the four atomic ones. */
+  /** Renewal-recognition coordinator. Maintains a TTL'd cache of
+   *  recently-vacated display names; on a same-name claim the
+   *  handler emits a `session_renewed` witness event (in place of
+   *  the would-be name_evicted + rename pair) framing the prior
+   *  `leave` as the departure half of an identity transition.
+   *  Atomic events still fire immediately; the coordinator never
+   *  defers a broadcast. */
   renewal: RenewalCoordinator
   nowIso(): string
 }
@@ -101,8 +102,21 @@ export function handleRegister(
     }
   }
   const receiveNotifications = parsed.receive_notifications ?? true
+  // Renewal recognition: if the registered name is in the vacated
+  // cache (its prior holder deregistered within VACATED_TTL_MS), the
+  // standard `name_evicted` broadcast inside evictDisplayNameHolders
+  // is suppressed and we emit a single `session_renewed` witness
+  // instead. The atomic `leave(prior_session)` already fired at
+  // deregister time; the witness retroactively frames it as the
+  // departure half of an identity transition.
+  const renewal =
+    parsed.display_name === null
+      ? { kind: 'normal' as const }
+      : ctx.renewal.tryRecognizeRenewal(parsed.display_name)
   if (parsed.display_name !== null) {
-    evictDisplayNameHolders(ctx, parsed.display_name, parsed.session_id)
+    evictDisplayNameHolders(ctx, parsed.display_name, parsed.session_id, {
+      suppressBroadcast: renewal.kind === 'renewed',
+    })
   }
   if (receiveNotifications) {
     upsertSession(ctx.storage, {
@@ -139,14 +153,15 @@ export function handleRegister(
     .all(parsed.session_id, liveCutoff) as RegisterResult['roster']
 
   if (receiveNotifications) {
-    // Defer the join broadcast through the renewal coordinator. If a
-    // matching `set_display_name` arrives within CLAIM_WINDOW_MS, the
-    // join either coalesces into `session_renewed` (renewal path) or
-    // is flushed in front of `rename` (normal claim). Otherwise the
-    // coordinator's timer fires the join once the window expires —
-    // the same observable event as the prior direct broadcast, just
-    // with a small latency.
-    ctx.renewal.enterPendingJoin(ctx, parsed.session_id, parsed.display_name)
+    if (renewal.kind === 'renewed' && parsed.display_name !== null) {
+      // Renewal path: one witness event in place of join + name_evicted.
+      broadcastSessionRenewed(ctx, renewal.oldSessionId, parsed.session_id, parsed.display_name)
+    } else {
+      // Standard path: fire join immediately. No deferral — the renewal
+      // pattern (if any) was already either recognized above or ruled
+      // out (vacated cache miss).
+      broadcastPresence(ctx, 'join', parsed.session_id, parsed.display_name)
+    }
   }
 
   return {
