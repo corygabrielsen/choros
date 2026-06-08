@@ -59,6 +59,7 @@ export function evictDisplayNameHolders(
   ctx: HandlerCtx,
   name: string,
   claimingSessionId: string,
+  opts: { suppressBroadcast?: boolean } = {},
 ): void {
   const evicted = ctx.storage.db
     .query(
@@ -75,7 +76,9 @@ export function evictDisplayNameHolders(
     .run(name, claimingSessionId)
   for (const e of evicted) {
     ctx.router.setDisplayName(e.id, null)
-    broadcastNameEviction(ctx, e.id, name, claimingSessionId)
+    if (!opts.suppressBroadcast) {
+      broadcastNameEviction(ctx, e.id, name, claimingSessionId)
+    }
   }
 }
 

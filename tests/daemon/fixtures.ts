@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type AdminServer, startAdminServer } from '#choros/daemon/admin.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
+import { RenewalCoordinator, realClock } from '#choros/daemon/renewal.ts'
 import { type RpcServer, startRpcServer } from '#choros/daemon/rpc.ts'
 import { SessionRouter } from '#choros/daemon/sessions.ts'
 import { openStorage, type Storage } from '#choros/daemon/storage.ts'
@@ -27,16 +28,34 @@ export interface TestDaemon {
  *  `:memory:`. Empirically the on-disk SQLite open dominated ~60% of
  *  per-test wall time and the suite has no concurrent-reader/writer
  *  assertions that require WAL-on-disk behavior. */
-export function spawnTestDaemon(opts?: { nowIso?: () => string }): TestDaemon {
+export function spawnTestDaemon(opts?: {
+  nowIso?: () => string
+  /** Override the join-deferral window. The test fixture defaults to
+   *  0 (`join` fires synchronously, same observable as the pre-
+   *  renewal daemon) so existing tests pass without modification.
+   *  Renewal-specific tests opt into the windowed behavior by passing
+   *  the production CLAIM_WINDOW_MS or an explicit small value with a
+   *  matching `setTimeout(0)` flush. */
+  claimWindowMs?: number
+  /** Override the leave-deferral window. Defaults to 0 (same as
+   *  pre-renewal daemon). Renewal-specific tests opt in. */
+  renewalWindowMs?: number
+}): TestDaemon {
   const stateRoot = mkdtempSync(join(tmpdir(), 'choros-test-'))
   const socketPath = join(stateRoot, 'daemon.sock')
   const adminSocketPath = join(stateRoot, 'admin.sock')
   const storage = openStorage(':memory:')
   const router = new SessionRouter()
+  const renewal = new RenewalCoordinator(
+    realClock,
+    opts?.claimWindowMs ?? 0,
+    opts?.renewalWindowMs ?? 0,
+  )
   const ctx: HandlerCtx = {
     storage,
     router,
     daemon: { version: 'test', startedAt: opts?.nowIso?.() ?? new Date(0).toISOString() },
+    renewal,
     nowIso: opts?.nowIso ?? ((): string => new Date().toISOString()),
   }
   const rpc = startRpcServer({ socketPath, ctx })

@@ -22,10 +22,11 @@
  */
 import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { DEAD_AGE_MS } from '#choros/constants.ts'
+import { CLAIM_WINDOW_MS, DEAD_AGE_MS, RENEWAL_WINDOW_MS } from '#choros/constants.ts'
 import { startAdminServer } from '#choros/daemon/admin.ts'
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
 import { broadcastDaemonLifecycle } from '#choros/daemon/notify.ts'
+import { RenewalCoordinator, realClock } from '#choros/daemon/renewal.ts'
 import { startRpcServer } from '#choros/daemon/rpc.ts'
 import { SessionRouter } from '#choros/daemon/sessions.ts'
 import {
@@ -171,10 +172,13 @@ function trackHandler<T>(p: Promise<T>): Promise<T> {
 // against their cached value (see shim's NOTIFY_DAEMON emission).
 const STARTED_AT = new Date().toISOString()
 
+const renewal = new RenewalCoordinator(realClock, CLAIM_WINDOW_MS, RENEWAL_WINDOW_MS)
+
 const ctx: HandlerCtx = {
   storage,
   router,
   daemon: { version: VERSION, startedAt: STARTED_AT },
+  renewal,
   nowIso: () => new Date().toISOString(),
 }
 
@@ -257,6 +261,11 @@ async function shutdown(signal: string): Promise<void> {
     const m = e instanceof Error ? e.message : String(e)
     process.stderr.write(`[choros-daemon] shutdown lifecycle broadcast failed: ${m}\n`)
   }
+  // Drop every deferred join/leave timer. Deferred broadcasts are
+  // transient — firing them post-shutdown would race the socket close
+  // and confuse consumers. Clients reconcile via the roster on
+  // reconnect.
+  renewal.shutdown()
   const hardExitTimer = setTimeout(() => {
     process.stderr.write(
       `[choros-daemon] shutdown wedged past ${SHUTDOWN_DEADLINE_MS}ms — hard exit\n`,

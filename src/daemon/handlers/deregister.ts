@@ -1,5 +1,4 @@
 import type { HandlerCtx } from '#choros/daemon/handlers/register.ts'
-import { broadcastPresence } from '#choros/daemon/notify.ts'
 import { clearSessionLock } from '#choros/daemon/storage.ts'
 import {
   type DeregisterArgs,
@@ -20,15 +19,28 @@ function validateDeregisterArgs(args: unknown): RpcError | DeregisterArgs {
 }
 
 /** Shim → daemon clean shutdown. Clears the session's lock_pid (the
- *  row stays for history) and drops the routing binding. */
+ *  row stays for history) and drops the routing binding.
+ *
+ *  Presence broadcast is routed through the renewal coordinator: when
+ *  the session held a display name, the `leave` is deferred for
+ *  RENEWAL_WINDOW_MS so a same-name reclaim within the window coalesces
+ *  into a single `session_renewed` event. Sessions without a display
+ *  name skip the deferral and emit `leave` immediately. Sessions that
+ *  disconnect while still in `Pending` join (joined-in-name-only, never
+ *  confirmed) drop silently — no leave is ever broadcast for an
+ *  identity that was never broadcast as joined. */
 export function handleDeregister(ctx: HandlerCtx, rawArgs: unknown): DeregisterResult | RpcError {
   const parsed = validateDeregisterArgs(rawArgs)
   if ('code' in parsed) return parsed
-  // Announce the departure to live peers BEFORE unbinding (the leaving
-  // session is excluded from the fan-out by id either way; doing it
-  // first keeps its display_name available from the cache).
   const displayName = ctx.router.displayNameFor(parsed.session_id) ?? null
-  broadcastPresence(ctx, 'leave', parsed.session_id, displayName)
+  // Flush any still-pending join in front of the leave so the
+  // observable sequence is `join → leave` for a came-and-went session
+  // rather than just `leave` for an unannounced one. The renewal
+  // path can still coalesce a subsequent same-name claim; flushing
+  // join here doesn't preempt that — it only affects the timing of
+  // the broadcast for this session's own join.
+  ctx.renewal.flushPendingJoinIfAny(ctx, parsed.session_id)
+  ctx.renewal.enterPendingLeave(ctx, parsed.session_id, displayName)
   clearSessionLock(ctx.storage, parsed.session_id)
   ctx.router.unbindBySession(parsed.session_id)
   return { acknowledged: true }

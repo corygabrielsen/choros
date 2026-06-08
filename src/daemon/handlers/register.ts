@@ -1,6 +1,7 @@
 import { LIVE_MAX_AGE_MS } from '#choros/constants.ts'
 import { DISPLAY_NAME_MAX_BYTES, nowMsFromCtx } from '#choros/daemon/helpers.ts'
-import { broadcastPresence, evictDisplayNameHolders } from '#choros/daemon/notify.ts'
+import { evictDisplayNameHolders } from '#choros/daemon/notify.ts'
+import type { RenewalCoordinator } from '#choros/daemon/renewal.ts'
 import type { NotificationSink, SessionRouter } from '#choros/daemon/sessions.ts'
 import type { Storage } from '#choros/daemon/storage.ts'
 import {
@@ -32,6 +33,13 @@ export interface HandlerCtx {
   storage: Storage
   router: SessionRouter
   daemon: DaemonIdentity
+  /** Coalescing layer for the (leave, join, name_evicted, rename)
+   *  sequence emitted on CC `/exit`-then-relaunch. Handlers route
+   *  their presence broadcasts through it instead of calling
+   *  `broadcastPresence` directly so a same-name reclaim within the
+   *  renewal window produces one `session_renewed` event in place of
+   *  the four atomic ones. */
+  renewal: RenewalCoordinator
   nowIso(): string
 }
 
@@ -131,9 +139,14 @@ export function handleRegister(
     .all(parsed.session_id, liveCutoff) as RegisterResult['roster']
 
   if (receiveNotifications) {
-    // Tell the live peers this session arrived (push-only, post-bind so
-    // the joiner itself is excluded by connectedSessionIds).
-    broadcastPresence(ctx, 'join', parsed.session_id, parsed.display_name)
+    // Defer the join broadcast through the renewal coordinator. If a
+    // matching `set_display_name` arrives within CLAIM_WINDOW_MS, the
+    // join either coalesces into `session_renewed` (renewal path) or
+    // is flushed in front of `rename` (normal claim). Otherwise the
+    // coordinator's timer fires the join once the window expires —
+    // the same observable event as the prior direct broadcast, just
+    // with a small latency.
+    ctx.renewal.enterPendingJoin(ctx, parsed.session_id, parsed.display_name)
   }
 
   return {
