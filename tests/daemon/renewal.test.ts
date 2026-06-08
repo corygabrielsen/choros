@@ -285,14 +285,22 @@ describe('RenewalCoordinator (unit, FakeClock)', () => {
     expect(clock.pendingCount()).toBe(0)
   })
 
-  test('renewal requires BOTH pending leave AND pending join', () => {
+  test('renewal requires pending leave only (joined claimant also coalesces)', () => {
     const clock = new FakeClock()
     const { ctx } = buildSpyCtx()
     const r = new RenewalCoordinator(clock, 100, 500)
-    // Pending leave only — joined session claiming a vacated name.
+    // Pending leave for the name → renewal fires regardless of the
+    // claimant's pending-join state. Empirically the new shim's
+    // set_display_name often arrives after its own join timer expired;
+    // gating on pendingJoin would miss the common case. A Joined
+    // claimant renaming to a recently-vacated name also fires
+    // session_renewed — observably correct.
     r.enterPendingLeave(ctx, 'sess-X', 'w3-config')
-    expect(r.tryRenewal('w3-config', 'sess-B')).toEqual({ kind: 'normal' })
-    // Pending join only — fresh session claiming a free name.
+    expect(r.tryRenewal('w3-config', 'sess-B')).toMatchObject({
+      kind: 'renewed',
+      oldSessionId: 'sess-X',
+    })
+    // No pending leave → normal path.
     r.enterPendingJoin(ctx, 'sess-A', null)
     expect(r.tryRenewal('fresh-name', 'sess-A')).toEqual({ kind: 'normal' })
   })

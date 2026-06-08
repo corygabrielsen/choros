@@ -137,26 +137,32 @@ export class RenewalCoordinator {
 
   /** Called by the set_display_name handler with the claiming session
    *  and the requested name. Returns:
-   *   - `{ kind: 'renewed', oldSessionId }` if the claim coalesces a
-   *     pending-leave (the caller broadcasts `session_renewed` and
-   *     SKIPS broadcasting join / name_evicted / rename for the pair).
+   *   - `{ kind: 'renewed', oldSessionId }` if a pending-leave exists
+   *     for `name` (the caller broadcasts `session_renewed` and SKIPS
+   *     broadcasting join / name_evicted / rename for the pair).
    *   - `{ kind: 'normal' }` otherwise — the caller falls through to
    *     the existing LWW/rename broadcast path AND should call
    *     `flushPendingJoinIfAny` before broadcasting join.
-   */
+   *
+   *  Note: the claimant's `Pending` vs `Joined` state is NOT required
+   *  for renewal. Empirically, the new shim's set_display_name often
+   *  arrives AFTER its own pending-join timer expires (CC startup +
+   *  shim backfill latency vs. CLAIM_WINDOW_MS). Gating on pendingJoin
+   *  would miss the common case. A Joined session voluntarily renaming
+   *  to a recently-vacated name also fires `session_renewed`; this is
+   *  observably correct (the name's owner just changed via a
+   *  deregister+claim cycle) and a rare-enough false positive that
+   *  the simpler predicate wins. */
   tryRenewal(name: string, claimingSessionId: string): RenewalOutcome {
     const pendingLeave = this.pendingLeaves.get(name)
-    const pendingJoin = this.pendingJoins.get(claimingSessionId)
-    // Renewal requires both: a vacated name AND a freshly-connected
-    // claimant. An already-joined session claiming a vacated name is a
-    // voluntary rename, not a renewal — it flushes normally.
-    if (pendingLeave === undefined || pendingJoin === undefined) {
-      return { kind: 'normal' }
-    }
+    if (pendingLeave === undefined) return { kind: 'normal' }
     this.clock.clearTimeout(pendingLeave.timer)
-    this.clock.clearTimeout(pendingJoin.timer)
     this.pendingLeaves.delete(name)
-    this.pendingJoins.delete(claimingSessionId)
+    const pendingJoin = this.pendingJoins.get(claimingSessionId)
+    if (pendingJoin !== undefined) {
+      this.clock.clearTimeout(pendingJoin.timer)
+      this.pendingJoins.delete(claimingSessionId)
+    }
     return { kind: 'renewed', oldSessionId: pendingLeave.sessionId }
   }
 
